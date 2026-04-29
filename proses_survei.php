@@ -3,7 +3,7 @@
 date_default_timezone_set('Asia/Makassar');
 require_once 'db.php';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $inputJSON = file_get_contents('php://input');
     $inputData = json_decode($inputJSON, true);
     if (is_array($inputData)) {
