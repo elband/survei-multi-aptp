@@ -90,6 +90,12 @@ if ($survey_id > 0) {
         </form>
     </div>
 
+    <!-- Copyright Footer Portofolio -->
+    <div style="text-align: center; margin-top: 25px; color: rgba(255, 255, 255, 0.9); font-size: 0.95rem; font-weight: 500; z-index: 10; position: relative;">
+        &copy; <?php echo date('Y'); ?> Aplikasi Survei Dinamis. <br>
+        Dibuat oleh <a href="#" style="color: #ffd43b; text-decoration: none; font-weight: 700;">IT BLU Kantor UPBU Kelas I A.P.T Pranoto</a>
+    </div>
+
     <!-- Script -->
     <script>
         // Memastikan JSON valid dan aman dikirim ke JavaScript

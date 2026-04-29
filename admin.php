@@ -94,6 +94,10 @@ if ($survey_id > 0) {
     $stmtData->execute($params);
     $results = $stmtData->fetchAll();
 
+    $stmtAllData = $pdo->prepare("SELECT raw_data FROM survey_responses $where");
+    $stmtAllData->execute($params);
+    $allRawDataForAnalytics = $stmtAllData->fetchAll(PDO::FETCH_COLUMN);
+
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM survey_responses WHERE survey_id = ?");
     $stmt->execute([$survey_id]);
     $totalResponden = $stmt->fetchColumn();
@@ -320,6 +324,10 @@ if ($survey_id > 0) {
                 <a href="#" class="active" data-tab="results">
                     <i class="fa-solid fa-chart-bar"></i>
                     <span>Hasil Survei</span>
+                </a>
+                <a href="#" data-tab="analytics">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>Analytics</span>
                 </a>
                 <a href="#" data-tab="editor">
                     <i class="fa-solid fa-pen-to-square"></i>
@@ -566,6 +574,22 @@ if ($survey_id > 0) {
             </div>
         </div>
 
+        <!-- ======================== TAB: ANALYTICS (Chart.js) ======================== -->
+        <div id="tab-analytics" class="tab-content">
+            <div class="page-header">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <button class="btn-mobile-menu" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+                    <div>
+                        <h1>Analytics Survei</h1>
+                        <p class="page-sub">Visualisasi data dari pilihan ganda, dropdown, dan checkbox (menyesuaikan filter tanggal di tab hasil)</p>
+                    </div>
+                </div>
+            </div>
+            <div id="charts-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; padding: 20px 0;">
+                <!-- Charts will be rendered here by JS -->
+            </div>
+        </div>
+
         <!-- ======================== TAB: EDITOR SURVEI (Interaktif JS) ======================== -->
         <div id="tab-editor" class="tab-content">
             <div class="page-header">
@@ -602,6 +626,12 @@ if ($survey_id > 0) {
         </div>
 
         <?php endif; ?>
+        
+        <!-- Copyright Footer Admin Portofolio -->
+        <div style="text-align: center; margin-top: 40px; margin-bottom: 20px; padding-top: 20px; border-top: 1px solid #e9ecef; color: #888; font-size: 0.9rem;">
+            &copy; <?php echo date('Y'); ?> Dashboard Admin Survei.<br>
+            Developed with <i class="fa-solid fa-heart" style="color: #fa5252;"></i> by <strong> IT BLU Kantor UPBU Kelas I A.P.T Pranoto</strong>
+        </div>
     </div>
 
     <!-- Modal Detail (Optional) -->
@@ -701,6 +731,112 @@ if ($survey_id > 0) {
 
     <?php if ($survey_id > 0): ?>
     <script src="assets/js/editor.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Analytics Logic
+        const allRawData = <?php echo isset($allRawDataForAnalytics) ? json_encode(array_map(fn($r) => json_decode($r, true), $allRawDataForAnalytics)) : '[]'; ?>;
+        
+        function renderCharts() {
+            const container = document.getElementById('charts-container');
+            if (!container || !surveyConfig || surveyConfig.length === 0) return;
+            
+            if (allRawData.length === 0) {
+                container.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding: 40px; color:#888;">Belum ada data responden untuk divisualisasikan.</div>';
+                return;
+            }
+            
+            let chartsAdded = false;
+            
+            const getColors = (count) => {
+                const colors = ['#1971c2', '#e03131', '#2f9e44', '#f59f00', '#6741d9', '#c2255c', '#0ca678', '#f06595', '#fd7e14', '#1c7ed6'];
+                return Array.from({length: count}, (_, i) => colors[i % colors.length]);
+            };
+
+            const walk = (qs) => {
+                qs.forEach(q => {
+                    if (q.type === 'row') { walk(q.questions); return; }
+                    
+                    if (['radio', 'select', 'checkbox'].includes(q.type) && q.name) {
+                        chartsAdded = true;
+                        
+                        const freqs = {};
+                        allRawData.forEach(res => {
+                            if (!res) return;
+                            let val = res[q.name];
+                            if (!val) return;
+                            if (Array.isArray(val)) {
+                                val.forEach(v => { freqs[v] = (freqs[v] || 0) + 1; });
+                            } else {
+                                freqs[val] = (freqs[val] || 0) + 1;
+                            }
+                        });
+                        
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        card.style.padding = '20px';
+                        card.style.background = '#fff';
+                        card.style.borderRadius = '12px';
+                        card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)';
+                        
+                        const title = document.createElement('h3');
+                        title.textContent = q.label || q.name;
+                        title.style.fontSize = '1rem';
+                        title.style.marginBottom = '15px';
+                        title.style.color = '#1a1a2e';
+                        
+                        const canvasWrap = document.createElement('div');
+                        canvasWrap.style.position = 'relative';
+                        canvasWrap.style.height = '250px';
+                        
+                        const canvas = document.createElement('canvas');
+                        canvasWrap.appendChild(canvas);
+                        card.appendChild(title);
+                        card.appendChild(canvasWrap);
+                        container.appendChild(card);
+                        
+                        const labels = Object.keys(freqs);
+                        const data = Object.values(freqs);
+                        
+                        if(labels.length > 0) {
+                            new Chart(canvas, {
+                                type: labels.length > 4 ? 'bar' : 'pie',
+                                data: {
+                                    labels: labels,
+                                    datasets: [{
+                                        label: 'Jumlah Jawaban',
+                                        data: data,
+                                        backgroundColor: getColors(labels.length),
+                                        borderWidth: 1
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    plugins: {
+                                        legend: { display: labels.length <= 4, position: 'right' }
+                                    }
+                                }
+                            });
+                        } else {
+                            canvasWrap.innerHTML = '<p style="color:#888; font-size:0.9rem; text-align:center; padding-top:100px;">Tidak ada data untuk pertanyaan ini</p>';
+                        }
+                    }
+                });
+            };
+            
+            surveyConfig.forEach(step => {
+                if (step.questions) walk(step.questions);
+            });
+            
+            if (!chartsAdded) {
+                container.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding: 40px; color:#888;">Tidak ada pertanyaan pilihan ganda/checkbox untuk divisualisasikan.</div>';
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            renderCharts();
+        });
+    </script>
     <?php endif; ?>
 
     <script>

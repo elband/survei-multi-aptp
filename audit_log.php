@@ -207,6 +207,63 @@ function badgeIcon($action) {
         .pagination a { background: #fff; color: #444; border: 1px solid #e0e0e0; }
         .pagination a:hover { background: #f1f3f5; }
         .pagination .active { background: #1971c2; color: #fff; border-color: #1971c2; }
+
+        /* === MOBILE RESPONSIVE === */
+        .mobile-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+            z-index: 990; backdrop-filter: blur(2px); opacity: 0; transition: opacity 0.3s;
+        }
+        .mobile-overlay.show { display: block; opacity: 1; }
+        .btn-mobile-menu { display: none; margin-right: 15px; border: none; background: transparent; font-size: 1.4rem; color: #1971c2; cursor: pointer; }
+
+        @media (max-width: 768px) {
+            body { font-size: 14px; }
+            .btn-mobile-menu { display: block; }
+            
+            /* Sidebar becomes a sliding drawer */
+            .sidebar { 
+                position: fixed; top: 0; left: -280px; width: 260px; height: 100vh; 
+                z-index: 1000; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+            }
+            .sidebar.open { left: 0; }
+            
+            .main-content { padding: 15px; }
+            
+            /* Audit Log layout fixes */
+            .audit-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+            .filter-bar { width: 100%; flex-wrap: wrap; }
+            .filter-bar form, .filter-bar select { width: 100%; }
+            .log-stats { flex-direction: column; }
+            .log-stat-card { width: 100%; }
+            
+            /* Table responsiveness */
+            .audit-table thead { display: none; }
+            .audit-table, .audit-table tbody, .audit-table tr, .audit-table td { display: block; width: 100%; box-sizing: border-box; }
+            .audit-table tr {
+                margin-bottom: 14px;
+                border: 1px solid #e9ecef;
+                border-radius: 10px;
+                padding: 10px 12px;
+                background: #fff;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            }
+            .audit-table td {
+                text-align: right;
+                padding: 6px 0;
+                border: none;
+                font-size: 0.88rem;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .audit-table td:nth-child(1)::before { content: "No"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:nth-child(2)::before { content: "Waktu"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:nth-child(3)::before { content: "Admin"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:nth-child(4)::before { content: "Aksi"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:nth-child(5)::before { content: "Target"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:nth-child(6)::before { content: "IP Address"; font-weight: bold; color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .audit-table td:first-child { border-bottom: 1px solid #f1f3f5; padding-bottom: 8px; }
+        }
     </style>
 </head>
 <body>

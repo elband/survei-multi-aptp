@@ -44,7 +44,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         echo json_encode(['success' => true]);
         exit;
     } catch (PDOException $e) {
-        die("Gagal menyimpan data: " . $e->getMessage());
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => "Gagal menyimpan data: " . $e->getMessage()]);
+        exit;
     }
 } else {
     header("Location: index.php");
