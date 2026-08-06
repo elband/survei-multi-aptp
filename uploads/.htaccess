@@ -1,0 +1,26 @@
+# ==========================================================
+# Proteksi Folder Upload
+# Folder ini hanya boleh menyajikan file gambar statis.
+# Semua skrip yang berhasil lolos ke sini TIDAK boleh dieksekusi.
+#
+# Catatan: sengaja TIDAK memakai "php_flag engine off".
+# Pada hosting yang menjalankan PHP sebagai CGI/FastCGI, direktif itu
+# menyebabkan Error 500 pada setiap request ke folder ini, sehingga
+# gambar tidak bisa dimuat sama sekali.
+# ==========================================================
+
+Options -ExecCGI -Indexes
+
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phar .cgi .pl .py
+RemoveType .php .phtml .phar
+AddType text/plain .php .phtml .phar .cgi .pl .py
+
+<FilesMatch "\.(php|phtml|php[0-9]|phar|cgi|pl|py|htaccess|shtml|inc)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

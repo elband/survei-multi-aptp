@@ -1,6 +1,7 @@
 <?php
 require_once 'db.php';
 require_once 'auth.php';
+require_once 'image_lib.php';
 checkLogin();
 
 $survey_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -21,6 +22,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'save_config' && $survey_id > 0) {
         $json = $_POST['config_json'];
         $title = $_POST['title'] ?? 'Survei';
+
+        // Hapus gambar ilustrasi yang sudah tidak dipakai lagi.
+        // save_config adalah satu-satunya hook andal: editor sepenuhnya
+        // client-side, jadi admin bisa saja membatalkan perubahannya.
+        $selOld = $pdo->prepare("SELECT config_json FROM surveys WHERE id = ?");
+        $selOld->execute([$survey_id]);
+        $oldJson = $selOld->fetchColumn();
+        if ($oldJson !== false) {
+            $oldUrls = collectIllustrationUrls(json_decode($oldJson, true));
+            $newUrls = collectIllustrationUrls(json_decode($json, true));
+            foreach (array_diff($oldUrls, $newUrls) as $gone) {
+                deleteUploadFile($gone);
+            }
+        }
+
         $stmt = $pdo->prepare("UPDATE surveys SET title = ?, config_json = ? WHERE id = ?");
         $stmt->execute([$title, $json, $survey_id]);
         auditLog($pdo, 'SAVE_CONFIG', "survey_id=$survey_id");
@@ -31,6 +47,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 if (isset($_GET['delete_survey'])) {
     verify_csrf($_GET['csrf'] ?? '');
     $delId = (int)$_GET['delete_survey'];
+
+    // ON DELETE CASCADE menghapus baris respons di dalam MySQL, sehingga PHP
+    // tidak pernah melihatnya. Karena itu file dibersihkan per-direktori di sini
+    // — inilah alasan tata letak folder memakai lapisan {survey_id}.
+    removeUploadDir("uploads/responses/$delId");
+    removeUploadDir("uploads/illustrations/$delId");
+
     $stmt = $pdo->prepare("DELETE FROM surveys WHERE id = ?");
     $stmt->execute([$delId]);
     auditLog($pdo, 'DELETE_SURVEY', "survey_id=$delId");
@@ -52,6 +75,21 @@ if (isset($_GET['duplicate_survey'])) {
     $stmt = $pdo->prepare("INSERT INTO surveys (title, config_json, is_active) SELECT CONCAT(title, ' (Copy)'), config_json, 0 FROM surveys WHERE id = ?");
     $stmt->execute([$dId]);
     $newId = $pdo->lastInsertId();
+
+    // Salin file ilustrasi ke direktori survei baru agar tidak ada file yang
+    // dipakai bersama dua survei — kalau dibiarkan, menyimpan salah satu survei
+    // bisa menghapus gambar yang masih dipakai survei lainnya.
+    $selDup = $pdo->prepare("SELECT config_json FROM surveys WHERE id = ?");
+    $selDup->execute([$newId]);
+    $dupJson = $selDup->fetchColumn();
+    if ($dupJson !== false) {
+        $dupCfg = json_decode($dupJson, true);
+        if (is_array($dupCfg)) {
+            $rewritten = duplicateIllustrations($dupCfg, $newId);
+            $updDup = $pdo->prepare("UPDATE surveys SET config_json = ? WHERE id = ?");
+            $updDup->execute([json_encode($rewritten), $newId]);
+        }
+    }
     auditLog($pdo, 'DUPLICATE_SURVEY', "from_id=$dId to_id=$newId");
     header("Location: admin.php");
     exit;
@@ -538,8 +576,10 @@ if ($survey_id > 0) {
                             $data = json_decode($row['raw_data'], true) ?: [];
                             $preview = "";
                             $count = 0;
+                            $hasPhoto = false;
                             foreach($data as $k => $v) {
-                                if($count >= 2) break;
+                                if(isResponseImage($v)) { $hasPhoto = true; continue; }
+                                if($count >= 2) continue;
                                 if(is_string($v) && strlen($v) > 0 && strlen($v) < 30) {
                                     $preview .= htmlspecialchars($v) . " | ";
                                     $count++;
@@ -551,7 +591,7 @@ if ($survey_id > 0) {
                             <tr>
                                 <td data-label="#"><?php echo $offset + $idx + 1; ?></td>
                                 <td data-label="Waktu" style="font-size:.85rem;color:#888"><?php echo date('d/m/Y H:i', strtotime($row['submitted_at'])); ?></td>
-                                <td data-label="Data"><strong><?php echo $preview; ?></strong></td>
+                                <td data-label="Data"><strong><?php echo $preview; ?></strong><?php if ($hasPhoto): ?> <i class="fa-solid fa-camera" style="color:#1971c2" title="Berisi foto"></i><?php endif; ?></td>
                                 <td data-label="Detail">
                                     <button class="btn" style="background:#eef3fc;color:#1971c2;border:none;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:.85rem" onclick="showDetail(<?php echo htmlspecialchars(json_encode($row), ENT_QUOTES); ?>)"><i class="fa-solid fa-eye"></i> Detail</button>
                                 </td>
@@ -657,6 +697,7 @@ if ($survey_id > 0) {
                     <option value="checkbox">Kotak Centang (Checkbox)</option>
                     <option value="select">Dropdown</option>
                     <option value="day-selector">Pilih Hari</option>
+                    <option value="image-upload">Unggah Gambar (Jawaban)</option>
                 </select>
                 <button class="btn-icon btn-delete-question" title="Hapus Pertanyaan">
                     <i class="fa-solid fa-trash"></i>
@@ -678,6 +719,20 @@ if ($survey_id > 0) {
                             <input type="checkbox" class="q-required">
                             <span class="toggle-knob"></span>
                         </label>
+                    </div>
+                </div>
+                <div class="q-illus-section">
+                    <label>Gambar Ilustrasi <span class="q-illus-hint">(opsional, maks <?php echo htmlspecialchars(ini_get('upload_max_filesize')); ?>)</span></label>
+                    <!-- Hidden input = pembawa nilai saat syncAllFromDOM membaca ulang DOM -->
+                    <input type="hidden" class="q-image-url" value="">
+                    <div class="q-illus-preview" style="display:none;">
+                        <img class="q-illus-img" src="" alt="Ilustrasi pertanyaan">
+                        <button type="button" class="btn-link q-illus-remove"><i class="fa-solid fa-trash"></i> Hapus Gambar</button>
+                    </div>
+                    <input type="file" class="q-illus-file" accept="image/jpeg,image/png,image/webp" style="display:none;">
+                    <div class="q-illus-actions">
+                        <button type="button" class="btn-link q-illus-pick"><i class="fa-solid fa-image"></i> Unggah Gambar</button>
+                        <span class="q-illus-status"></span>
                     </div>
                 </div>
                 <div class="q-options-section" style="display:none;">
@@ -841,6 +896,20 @@ if ($survey_id > 0) {
 
     <script>
 
+        // Path gambar jawaban — hanya pola yang diproduksi upload_image.php
+        const IMG_RE = /^uploads\/responses\/\d+\/[a-f0-9]{32}\.(jpg|png|webp)$/;
+
+        // Nilai di bawah berasal dari responden dan masuk ke innerHTML,
+        // jadi wajib di-escape sebelum dirangkai.
+        const esc = (s) => String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+
+        // Render satu nilai jawaban: gambar jadi thumbnail, sisanya teks biasa
+        const renderVal = (v) => IMG_RE.test(v)
+            ? `<a href="${esc(v)}" target="_blank" rel="noopener"><img src="${esc(v)}" class="detail-thumb" alt="Foto jawaban"></a>`
+            : `<span class="detail-val">${esc(v)}</span>`;
+
         // ================================================================
         // DETAIL MODAL - Tampilkan seluruh jawaban responden
         // ================================================================
@@ -874,9 +943,9 @@ if ($survey_id > 0) {
                         const val = allData[q.name];
                         if (val === undefined || val === null || val === '') return;
                         const display = Array.isArray(val)
-                            ? `<div class="detail-tags">${val.map(v => `<span class="detail-tag">${v}</span>`).join('')}</div>`
-                            : `<span class="detail-val">${val}</span>`;
-                        html += `<div class="detail-item"><span class="detail-key">${q.label}</span>${display}</div>`;
+                            ? `<div class="detail-tags">${val.map(v => `<span class="detail-tag">${esc(v)}</span>`).join('')}</div>`
+                            : renderVal(val);
+                        html += `<div class="detail-item"><span class="detail-key">${esc(q.label)}</span>${display}</div>`;
                     });
                     walk(step.questions);
                     html += `</div>`;
@@ -887,9 +956,9 @@ if ($survey_id > 0) {
                 Object.entries(allData).forEach(([k, v]) => {
                     if (skip.includes(k) || v === null || v === '') return;
                     const display = Array.isArray(v)
-                        ? `<div class="detail-tags">${v.map(i => `<span class="detail-tag">${i}</span>`).join('')}</div>`
-                        : `<span class="detail-val">${v}</span>`;
-                    html += `<div class="detail-item"><span class="detail-key">${k}</span>${display}</div>`;
+                        ? `<div class="detail-tags">${v.map(i => `<span class="detail-tag">${esc(i)}</span>`).join('')}</div>`
+                        : renderVal(v);
+                    html += `<div class="detail-item"><span class="detail-key">${esc(k)}</span>${display}</div>`;
                 });
                 html += `</div>`;
             }
@@ -930,12 +999,19 @@ if ($survey_id > 0) {
                             <tr style="border-bottom:1px solid #eee;">
                                 <td style="padding:12px;"><?php echo $offset + $idx + 1; ?></td>
                                 <td style="padding:12px; font-size:0.85rem; color:#666;"><?php echo date('d/m/Y H:i', strtotime($row['submitted_at'])); ?></td>
-                                <?php foreach ($tableKeys as $key): 
+                                <?php foreach ($tableKeys as $key):
                                     $val = isset($data[$key]) ? $data[$key] : '-';
                                     if (is_array($val)) $val = implode(', ', $val);
-                                    $valStr = htmlspecialchars(mb_strlen($val) > 100 ? mb_substr($val, 0, 100) . '...' : $val);
+                                    $isPhoto = isResponseImage($val);
+                                    $valStr = $isPhoto ? '' : htmlspecialchars(mb_strlen($val) > 100 ? mb_substr($val, 0, 100) . '...' : $val);
                                 ?>
-                                    <td style="padding:12px; max-width:300px; overflow:hidden; text-overflow:ellipsis;"><?php echo $valStr; ?></td>
+                                    <td style="padding:12px; max-width:300px; overflow:hidden; text-overflow:ellipsis;"><?php
+                                        if ($isPhoto) {
+                                            echo '<a href="' . htmlspecialchars($val) . '" target="_blank" rel="noopener"><img src="' . htmlspecialchars($val) . '" alt="Foto" style="height:40px;border-radius:4px"></a>';
+                                        } else {
+                                            echo $valStr;
+                                        }
+                                    ?></td>
                                 <?php endforeach; ?>
                             </tr>
                         <?php endforeach; ?>

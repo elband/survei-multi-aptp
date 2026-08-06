@@ -1,7 +1,12 @@
 <?php
 require_once 'db.php';
 require_once 'auth.php';
+require_once 'image_lib.php';
 checkLogin();
+
+// Path relatif tidak berguna di dalam berkas Excel yang sudah diunduh,
+// jadi foto ditulis sebagai tautan absolut.
+$baseUrl = baseUrl();
 
 $survey_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
@@ -72,9 +77,14 @@ header("Expires: 0");
                     <?php foreach ($columns as $col): ?>
                         <td>
                             <?php 
-                                $val = isset($row['parsed_data'][$col]) ? $row['parsed_data'][$col] : ''; 
+                                $val = isset($row['parsed_data'][$col]) ? $row['parsed_data'][$col] : '';
                                 if (is_array($val)) {
                                     echo htmlspecialchars(implode(', ', $val));
+                                } elseif (isResponseImage($val)) {
+                                    // Excel merender anchor di .xls berformat tabel HTML,
+                                    // tapi tidak akan mengambil gambar remote — jadi tautan saja.
+                                    $abs = htmlspecialchars($baseUrl . $val);
+                                    echo '<a href="' . $abs . '">' . $abs . '</a>';
                                 } else {
                                     echo htmlspecialchars((string)$val);
                                 }

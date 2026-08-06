@@ -2,3 +2,9 @@ node_modules/
 .env
 results.json
 .DS_Store
+
+# File upload dari admin & responden (jangan masuk repo),
+# tapi file penjaga folder tetap ikut agar proteksi ter-deploy.
+uploads/*
+!uploads/.htaccess
+!uploads/index.html

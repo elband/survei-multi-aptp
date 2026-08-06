@@ -11,6 +11,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentStep = 0;
     const totalSteps = surveyConfig.length;
 
+    // Jumlah upload yang sedang berjalan. Selama > 0, tombol navigasi &
+    // kirim dinonaktifkan agar responden tidak mengirim form dengan
+    // nilai path yang belum terisi.
+    let pendingUploads = 0;
+    const setNavBusy = () => {
+        const busy = pendingUploads > 0;
+        btnNext.disabled = busy;
+        btnSubmit.disabled = busy;
+    };
+
     // Helper to generate unique IDs
     let idCounter = 0;
     const generateId = (prefix) => `${prefix}-${idCounter++}`;
@@ -83,6 +93,16 @@ document.addEventListener('DOMContentLoaded', () => {
         label.innerHTML = `${q.label} ${q.required ? '<span class="required">*</span>' : ''}`;
         if (q.type === 'text') label.setAttribute('for', q.name);
         wrapper.appendChild(label);
+
+        // Gambar ilustrasi — berlaku untuk semua tipe pertanyaan
+        if (q.imageUrl) {
+            const illus = document.createElement('img');
+            illus.className = 'q-illustration';
+            illus.src = q.imageUrl;
+            illus.alt = q.label || 'Ilustrasi pertanyaan';
+            illus.loading = 'lazy';
+            wrapper.appendChild(illus);
+        }
 
         if (q.type === 'text' || q.type === 'textarea') {
             const input = document.createElement(q.type === 'text' ? 'input' : 'textarea');
@@ -212,7 +232,184 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             wrapper.appendChild(group);
+        } else if (q.type === 'image-upload') {
+            renderImageUpload(q, wrapper);
         }
+    };
+
+    // ---- Widget Unggah Gambar (jawaban responden) ----
+    const MAX_DIMENSION = 1600;
+    const JPEG_QUALITY = 0.85;
+
+    /**
+     * Perkecil gambar via canvas sebelum dikirim. Foto HP 6 MB menjadi ~300 KB,
+     * sehingga terhindar dari batas upload_max_filesize hosting yang ketat.
+     * Jika browser tidak mendukung, file asli dipakai apa adanya.
+     */
+    const compressImage = (file) => new Promise((resolve) => {
+        if (!window.HTMLCanvasElement || !file.type.startsWith('image/')) return resolve(file);
+
+        const img = new Image();
+        const objUrl = URL.createObjectURL(file);
+
+        img.onload = () => {
+            URL.revokeObjectURL(objUrl);
+            try {
+                const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
+                // Sudah cukup kecil dan bukan format yang perlu dikonversi
+                if (scale === 1 && file.size <= 1024 * 1024) return resolve(file);
+
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(img.width * scale);
+                canvas.height = Math.round(img.height * scale);
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                if (!canvas.toBlob) return resolve(file);
+                canvas.toBlob((blob) => {
+                    if (!blob || blob.size >= file.size) return resolve(file);
+                    resolve(new File([blob], 'foto.jpg', { type: 'image/jpeg' }));
+                }, 'image/jpeg', JPEG_QUALITY);
+            } catch (e) {
+                resolve(file);
+            }
+        };
+        img.onerror = () => { URL.revokeObjectURL(objUrl); resolve(file); };
+        img.src = objUrl;
+    });
+
+    const renderImageUpload = (q, wrapper) => {
+        const box = document.createElement('div');
+        box.className = 'image-upload-box';
+
+        // Pembawa nilai. HARUS type="hidden": validateCurrentStep menyeleksi
+        // input[type="text"] dan akan salah memvalidasinya jika bukan.
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = q.name;
+        hidden.value = '';
+
+        // TANPA atribut name — FormData akan memungutnya sebagai objek File
+        // dan JSON.stringify mengubahnya menjadi {}.
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/jpeg,image/png,image/webp';
+        fileInput.className = 'image-upload-input';
+
+        const btnPick = document.createElement('button');
+        btnPick.type = 'button';
+        btnPick.className = 'btn-upload';
+        btnPick.innerHTML = '<i class="fa-solid fa-camera"></i> Pilih Gambar';
+
+        const preview = document.createElement('div');
+        preview.className = 'image-upload-preview';
+        preview.style.display = 'none';
+
+        const previewImg = document.createElement('img');
+        const btnRemove = document.createElement('button');
+        btnRemove.type = 'button';
+        btnRemove.className = 'btn-upload-remove';
+        btnRemove.innerHTML = '<i class="fa-solid fa-trash"></i> Hapus';
+        preview.appendChild(previewImg);
+        preview.appendChild(btnRemove);
+
+        const bar = document.createElement('div');
+        bar.className = 'upload-progress';
+        bar.style.display = 'none';
+        const barFill = document.createElement('div');
+        barFill.className = 'upload-progress-fill';
+        bar.appendChild(barFill);
+
+        const status = document.createElement('div');
+        status.className = 'image-upload-status';
+
+        box.appendChild(hidden);
+        box.appendChild(fileInput);
+        box.appendChild(btnPick);
+        box.appendChild(preview);
+        box.appendChild(bar);
+        box.appendChild(status);
+        wrapper.appendChild(box);
+
+        const reset = () => {
+            hidden.value = '';
+            previewImg.removeAttribute('src');
+            preview.style.display = 'none';
+            btnPick.innerHTML = '<i class="fa-solid fa-camera"></i> Pilih Gambar';
+            fileInput.value = '';
+        };
+
+        btnPick.addEventListener('click', () => fileInput.click());
+        btnRemove.addEventListener('click', () => { reset(); status.textContent = ''; });
+
+        fileInput.addEventListener('change', async () => {
+            const raw = fileInput.files && fileInput.files[0];
+            if (!raw) return;
+
+            // Preview instan sebelum upload selesai
+            const localUrl = URL.createObjectURL(raw);
+            previewImg.src = localUrl;
+            preview.style.display = 'flex';
+            status.textContent = 'Menyiapkan gambar...';
+            status.className = 'image-upload-status';
+
+            const file = await compressImage(raw);
+
+            const fd = new FormData();
+            fd.append('mode', 'answer');
+            fd.append('survey_id', document.querySelector('input[name="survey_id"]').value);
+            fd.append('field', q.name);
+            fd.append('file', file);
+
+            pendingUploads++;
+            setNavBusy();
+            btnPick.disabled = true;
+            bar.style.display = 'block';
+            barFill.style.width = '0%';
+            status.textContent = 'Mengunggah...';
+
+            // XHR, bukan fetch — hanya XHR yang punya upload.onprogress
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', 'upload_image.php');
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    barFill.style.width = Math.round((e.loaded / e.total) * 100) + '%';
+                }
+            };
+
+            xhr.onload = () => {
+                let data = null;
+                try { data = JSON.parse(xhr.responseText); } catch (e) { /* ditangani di bawah */ }
+
+                if (data && data.success) {
+                    hidden.value = data.path;
+                    previewImg.src = data.path;
+                    btnPick.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Ganti Gambar';
+                    status.textContent = 'Gambar berhasil diunggah.';
+                    status.className = 'image-upload-status success';
+                } else {
+                    reset();
+                    status.textContent = (data && data.message) ? data.message : 'Gagal mengunggah gambar. Silakan coba lagi.';
+                    status.className = 'image-upload-status error';
+                }
+            };
+
+            xhr.onerror = () => {
+                reset();
+                status.textContent = 'Koneksi terputus saat mengunggah. Silakan coba lagi.';
+                status.className = 'image-upload-status error';
+            };
+
+            xhr.onloadend = () => {
+                URL.revokeObjectURL(localUrl);
+                pendingUploads--;
+                setNavBusy();
+                btnPick.disabled = false;
+                bar.style.display = 'none';
+            };
+
+            xhr.send(fd);
+        });
     };
 
     // Toggle Styles for Custom Radios/Checkboxes Focus/Selected
@@ -334,7 +531,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Validate grouped required fields (checkboxes, radios, day-selector)
         requiredNames.forEach(req => {
-            if (req.type === 'radio' || req.type === 'checkbox' || req.type === 'day-selector') {
+            if (req.type === 'image-upload') {
+                const h = currentStepEl.querySelector(`input[type="hidden"][name="${req.name}"]`);
+                if (!h) return;
+                const containerElement = h.closest('.input-group');
+                if (!h.value) {
+                    isValid = false;
+                    if (containerElement) {
+                        containerElement.style.borderLeft = "4px solid var(--error)";
+                        containerElement.style.paddingLeft = "10px";
+                    }
+                    // Hidden input tidak bisa difokus — arahkan ke tombol pilih
+                    firstInvalid = firstInvalid || h.parentElement.querySelector('.btn-upload');
+                } else if (containerElement) {
+                    containerElement.style.borderLeft = "none";
+                    containerElement.style.paddingLeft = "0";
+                }
+            } else if (req.type === 'radio' || req.type === 'checkbox' || req.type === 'day-selector') {
                 const groupInputs = currentStepEl.querySelectorAll(`input[name="${req.name}"]`);
                 if (groupInputs.length > 0) {
                     const isChecked = Array.from(groupInputs).some(cb => cb.checked);
@@ -384,6 +597,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Handle Form Submission
     form.addEventListener('submit', (e) => {
         e.preventDefault();
+
+        if (pendingUploads > 0) {
+            alert('Mohon tunggu, gambar sedang diunggah.');
+            return;
+        }
 
         if (validateCurrentStep()) {
             const formData = new FormData(form);

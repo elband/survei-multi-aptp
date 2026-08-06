@@ -578,3 +578,115 @@ textarea:focus {
         padding: 12px 20px;
     }
 }
+
+/* ===================== GAMBAR ILUSTRASI & UNGGAH GAMBAR ===================== */
+
+/* Ilustrasi soal — berlaku untuk semua tipe pertanyaan */
+.q-illustration {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--border-radius-md);
+    margin: 8px 0 14px;
+    border: 1px solid var(--border);
+}
+
+/* Widget unggah gambar (jawaban responden) */
+.image-upload-box {
+    margin-top: 8px;
+}
+
+.image-upload-input {
+    display: none;
+}
+
+.btn-upload {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: #fff;
+    color: var(--primary-color);
+    border: 2px dashed var(--border);
+    border-radius: var(--border-radius-md);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-upload:hover:not(:disabled) {
+    border-color: var(--primary-light);
+    background: rgba(59, 130, 246, 0.06);
+}
+
+.btn-upload:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.image-upload-preview {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.image-upload-preview img {
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border);
+}
+
+.btn-upload-remove {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: transparent;
+    color: var(--error);
+    border: 1px solid var(--error);
+    border-radius: var(--border-radius-sm);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-upload-remove:hover {
+    background: var(--error);
+    color: #fff;
+}
+
+.upload-progress {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+.upload-progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--primary-light);
+    transition: width 0.15s linear;
+}
+
+.image-upload-status {
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    min-height: 1.2em;
+}
+
+.image-upload-status.success { color: #16a34a; }
+.image-upload-status.error   { color: var(--error); }
+
+@media (max-width: 480px) {
+    .image-upload-preview img { max-height: 160px; }
+    .btn-upload { width: 100%; justify-content: center; }
+}

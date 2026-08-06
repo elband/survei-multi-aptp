@@ -857,3 +857,64 @@ td.loading {
     color: var(--primary-light);
     background: #eef3fc;
 }
+
+/* ===================== BLOK GAMBAR ILUSTRASI DI EDITOR ===================== */
+.q-illus-section {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px dashed #dee2e6;
+}
+
+.q-illus-section > label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 8px;
+}
+
+.q-illus-hint {
+    font-weight: 400;
+    color: #adb5bd;
+}
+
+.q-illus-preview {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.q-illus-img {
+    max-height: 120px;
+    max-width: 100%;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+}
+
+.q-illus-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.q-illus-status {
+    font-size: 0.8rem;
+    color: #868e96;
+}
+
+.q-illus-remove {
+    color: #fa5252 !important;
+}
+
+/* Thumbnail foto jawaban di modal detail */
+.detail-thumb {
+    max-height: 140px;
+    max-width: 100%;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    display: block;
+    margin-top: 4px;
+}

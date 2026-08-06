@@ -152,7 +152,11 @@ const syncAllFromDOM = () => {
             const name = card.querySelector('.q-name').value;
             const required = card.querySelector('.q-required').checked;
             const hasOther = card.querySelector('.q-has-other').checked;
+            // Dibawa lewat hidden input karena DOM adalah satu-satunya sumber
+            // kebenaran di sini — properti yang tidak dibaca akan hilang saat simpan.
+            const imageUrl = card.querySelector('.q-image-url').value || '';
             const q = { type, name, label, required, hasOther };
+            if (imageUrl) q.imageUrl = imageUrl;
             if (TYPES_WITH_OPTIONS.includes(type)) {
                 q.options = [];
                 card.querySelectorAll('.option-row input[type="text"]').forEach(inp => {
@@ -295,6 +299,69 @@ const renderQuestion = (q, qIdx, stepId, container) => {
     card.querySelector('.q-name').value = q.name || '';
     card.querySelector('.q-required').checked = !!q.required;
     card.querySelector('.q-has-other').checked = !!q.hasOther;
+
+    // ---- Gambar Ilustrasi ----
+    // Selalu lewat penugasan properti (.value/.src), jangan innerHTML,
+    // agar teks berisi kutip/tag tidak merusak markup.
+    const urlInput = card.querySelector('.q-image-url');
+    const illusPrev = card.querySelector('.q-illus-preview');
+    const illusImg = card.querySelector('.q-illus-img');
+    const illusFile = card.querySelector('.q-illus-file');
+    const illusPick = card.querySelector('.q-illus-pick');
+    const illusStatus = card.querySelector('.q-illus-status');
+
+    const setIllus = (url) => {
+        urlInput.value = url || '';
+        if (url) {
+            illusImg.src = url;
+            illusPrev.style.display = 'flex';
+            illusPick.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Ganti Gambar';
+        } else {
+            illusImg.removeAttribute('src');
+            illusPrev.style.display = 'none';
+            illusPick.innerHTML = '<i class="fa-solid fa-image"></i> Unggah Gambar';
+        }
+    };
+    setIllus(q.imageUrl || '');
+
+    illusPick.addEventListener('click', () => illusFile.click());
+
+    illusFile.addEventListener('change', async () => {
+        const f = illusFile.files && illusFile.files[0];
+        if (!f) return;
+
+        illusStatus.textContent = 'Mengunggah...';
+        illusPick.disabled = true;
+
+        const fd = new FormData();
+        fd.append('mode', 'illustration');
+        fd.append('survey_id', typeof surveyId !== 'undefined' ? surveyId : 0);
+        fd.append('csrf', typeof csrfToken !== 'undefined' ? csrfToken : '');
+        fd.append('file', f);
+
+        try {
+            const res = await fetch('upload_image.php', {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: fd
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.message || 'Gagal mengunggah gambar');
+            setIllus(data.path);
+            illusStatus.textContent = '';
+            showToast('✅ Gambar ilustrasi diunggah. Jangan lupa Simpan Perubahan.', 'success');
+        } catch (err) {
+            illusStatus.textContent = '';
+            showToast('❌ ' + err.message, 'error');
+        } finally {
+            illusPick.disabled = false;
+            illusFile.value = ''; // agar file yang sama bisa dipilih ulang
+        }
+    });
+
+    // Hanya melepas referensi. File dihapus server saat save_config,
+    // karena admin bisa saja membatalkan perubahan atau menekan tombol back.
+    card.querySelector('.q-illus-remove').addEventListener('click', () => setIllus(''));
 
     const optSec = card.querySelector('.q-options-section');
     const optList = card.querySelector('.q-options-list');
