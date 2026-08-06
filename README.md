@@ -92,6 +92,5 @@ Aplikasi siap digunakan.
 
 ## 📄 Hak Cipta & Portofolio
 Proyek aplikasi ini merupakan karya dan hak cipta penuh dari:
-**IT BLU Kantor UPBU Kelas I A.P.T Pranoto** dan dikembangkan Oleh
-[**Drizasri**](https://www.instagram.com/drizasri)
+**IT BLU Kantor UPBU Kelas I A.P.T Pranoto**
 Pengembangan dirancang khusus dengan menitikberatkan pada kestabilan ekosistem server tanpa bergantung pada library vendor pihak ketiga yang memberatkan *bandwith*.
