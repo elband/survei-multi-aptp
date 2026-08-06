@@ -1,0 +1,19 @@
+# Normalisasi line ending. Mencegah file yang diedit di Windows (atau di-upload
+# lewat FTP mode teks) tercatat sebagai "seluruh file berubah" hanya karena CRLF.
+* text=auto eol=lf
+
+# Skrip shell WAJIB LF — CRLF membuat Linux menolaknya dengan
+# "bad interpreter: /bin/bash^M".
+*.sh text eol=lf
+
+# File biner: jangan disentuh sama sekali.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.svg text eol=lf
+*.pdf binary
+*.zip binary
+*.xlsx binary
