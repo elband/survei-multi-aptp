@@ -1,10 +1,14 @@
 <?php
 require_once 'db.php';
+require_once 'auth.php';
 $status = $_GET['status'] ?? '';
 $survey_id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 
+// Membuka /survei/ tanpa ID survei bukan halaman untuk responden — arahkan ke
+// panel admin. Kalau sesi sudah ada, langsung ke dashboard tanpa login ulang.
 if ($status !== 'success' && $survey_id === 0) {
-    showErrorPage("Akses Ditolak", "ID Survei tidak valid.", "https://aptpairport.id/", "Kembali ke Beranda");
+    header('Location: ' . (isLoggedIn() ? 'admin.php' : 'login.php'));
+    exit;
 }
 
 $survey = null;
@@ -34,7 +38,7 @@ if ($survey_id > 0) {
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=2">
 </head>
 
 <body>
@@ -91,7 +95,7 @@ if ($survey_id > 0) {
     </div>
 
     <!-- Copyright Footer Portofolio -->
-    <div style="text-align: center; margin-top: 25px; color: rgba(255, 255, 255, 0.9); font-size: 0.95rem; font-weight: 500; z-index: 10; position: relative;">
+    <div style="width: 100%; text-align: center; margin-top: 25px; margin-bottom: 25px; color: rgba(255, 255, 255, 0.9); font-size: 0.95rem; font-weight: 500; z-index: 10; position: relative;">
         &copy; <?php echo date('Y'); ?> Aplikasi Survei Dinamis. <br>
         Dibuat oleh <a href="#" style="color: #ffd43b; text-decoration: none; font-weight: 700;">IT BLU Kantor UPBU Kelas I A.P.T Pranoto</a>
     </div>
