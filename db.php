@@ -38,8 +38,34 @@ function loadEnv($path) {
     }
 }
 
-// Load .env dari direktori yang sama dengan db.php
-loadEnv(__DIR__ . '/.env');
+/**
+ * Menentukan lokasi file .env.
+ *
+ * Menaruh kredensial di dalam folder yang dilayani web server selalu berisiko:
+ * keamanannya bergantung pada aturan config yang benar, dan aturan itu mudah
+ * meleset tanpa disadari. Urutan di bawah mengutamakan lokasi DI LUAR document
+ * root, sehingga file tidak mungkin diunduh lewat URL apa pun.
+ */
+function findEnvFile($dir) {
+    // 1. Lokasi eksplisit (mis. SURVEI_ENV_PATH=/etc/survei/env di php-fpm)
+    $explicit = getenv('SURVEI_ENV_PATH');
+    if ($explicit && is_readable($explicit)) return $explicit;
+
+    // 2. survei.env di salah satu folder induk — di luar document root
+    $cur = $dir;
+    for ($i = 0; $i < 4; $i++) {
+        $parent = dirname($cur);
+        if ($parent === $cur) break;
+        $cur = $parent;
+        if (is_readable($cur . '/survei.env')) return $cur . '/survei.env';
+    }
+
+    // 3. Lokasi lama, di dalam folder aplikasi. Masih didukung agar instalasi
+    //    yang belum dipindah tetap berjalan, tapi wajib diblokir web server.
+    return $dir . '/.env';
+}
+
+loadEnv(findEnvFile(__DIR__));
 
 // Database Config
 $host = $_ENV['DB_HOST'] ?? 'localhost';
