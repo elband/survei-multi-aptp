@@ -15,15 +15,24 @@
 #   sudo ./deploy.sh --check                  # hanya periksa & verifikasi, tanpa mengubah apa pun
 #
 # Opsi lain:
-#   --project DIR     path proyek        (default: /var/www/aptpairport.id/survei)
+#   --project DIR     path proyek yang dilayani Nginx
+#                     (default: /var/www/aptpairport.id/dasboardwebutama/public/survei)
+#   --url-path P      sub-path URL aplikasi (default: /survei)
 #   --domain URL      base URL verifikasi (default: dibaca dari server_name Nginx)
-#   --site FILE       file server block Nginx (default: dideteksi dari 'root')
+#   --site FILE       file server block Nginx (default: dideteksi dari location ^~)
 #   --skip-backup     lewati backup tar + mysqldump
 #
 set -euo pipefail
 
 # ---------------------------------------------------------------- konfigurasi
-PROJECT_DIR="/var/www/aptpairport.id/survei"
+# Folder yang BENAR-BENAR dilayani Nginx. Bukan /var/www/aptpairport.id/survei —
+# itu clone lama yang tidak tersambung ke web server.
+PROJECT_DIR="/var/www/aptpairport.id/dasboardwebutama/public/survei"
+
+# Path URL aplikasi. Nginx memakai 'root .../public' + 'location ^~ /survei/',
+# jadi aplikasi tidak berada di akar domain.
+URL_PATH="/survei"
+
 DOMAIN=""
 SITE_FILE=""
 PATCH_NGINX=0
@@ -55,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --project)      PROJECT_DIR="${2:?--project butuh path}"; shift 2 ;;
         --domain)       DOMAIN="${2:?--domain butuh URL}"; shift 2 ;;
+        --url-path)     URL_PATH="/${2#/}"; URL_PATH="${URL_PATH%/}"; shift 2 ;;
         --site)         SITE_FILE="${2:?--site butuh path}"; shift 2 ;;
         --patch-nginx)  PATCH_NGINX=1; shift ;;
         --skip-pull)    SKIP_PULL=1; shift ;;
@@ -81,6 +91,7 @@ printf '%s\n' "$BOLD┌───────────────────
 printf '%s\n' "$BOLD│  Deploy Survei APT Pranoto — Nginx + PHP-FPM  │$N"
 printf '%s\n' "$BOLD└───────────────────────────────────────────────┘$N"
 info "Proyek : $PROJECT_DIR"
+info "URL    : ${URL_PATH}/"
 [[ $CHECK_ONLY -eq 1 ]] && info "Mode   : ${Y}CHECK ONLY — tidak ada yang diubah${N}"
 
 # ============================================================ 1. PRE-FLIGHT
@@ -261,35 +272,38 @@ info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertam
 # ======================================================= 5. KONFIG NGINX
 step "5/7  Konfigurasi Nginx"
 
-# Cari server block yang root-nya menunjuk ke proyek ini
+# Cari server block yang memuat 'location ^~ /survei/' (aplikasi ada di sub-path,
+# jadi 'root' menunjuk ke folder induk, bukan ke folder proyek).
 if [[ -z "$SITE_FILE" ]]; then
-    SITE_FILE="$(grep -rlE "^[[:space:]]*root[[:space:]]+${PROJECT_DIR%/}/?[[:space:]]*;" \
+    SITE_FILE="$(grep -rlE "location[[:space:]]*\^~[[:space:]]*${URL_PATH}/" \
         /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
 fi
 
+UPLOADS_LOC="${URL_PATH}/uploads/"
 HAS_UPLOADS_BLOCK=0
 HAS_BODY_SIZE=0
 if [[ -n "$SITE_FILE" && -f "$SITE_FILE" ]]; then
     ok "Server block: $SITE_FILE"
-    grep -qE 'location[[:space:]]*\^~[[:space:]]*/uploads/' "$SITE_FILE" && HAS_UPLOADS_BLOCK=1
+    grep -qE "location[[:space:]]*\^~[[:space:]]*${UPLOADS_LOC}" "$SITE_FILE" && HAS_UPLOADS_BLOCK=1
     grep -qE 'client_max_body_size' "$SITE_FILE" && HAS_BODY_SIZE=1
 else
-    warn "Server block untuk $PROJECT_DIR tidak terdeteksi otomatis"
+    warn "Server block yang melayani ${URL_PATH}/ tidak terdeteksi otomatis"
     info "Tentukan manual dengan: --site /etc/nginx/sites-available/NAMA_SITE"
 fi
 
 NGINX_SNIPPET="$TMPDIR_DEPLOY/snippet.conf"
-# Heredoc dikutip agar $uri tetap literal
+# Heredoc dikutip agar $uri tetap literal; URL_PATH disisipkan setelahnya.
 cat > "$NGINX_SNIPPET" <<'SNIPPET'
 
     # ===== survei: fitur upload gambar (ditambahkan oleh deploy.sh) =====
-    # Default Nginx hanya 1 MB — upload 5 MB ditolak 413 sebelum PHP melihatnya.
-    client_max_body_size 6M;
-
     # Sajikan file statis di uploads/, TOLAK eksekusi skrip apa pun.
-    # Tanda "^~" wajib: tanpa itu "location ~ \.php$" yang global tetap menang
-    # dan file .php yang berhasil diselundupkan ke uploads/ akan tereksekusi.
-    location ^~ /uploads/ {
+    #
+    # Blok ini diletakkan di level server, sejajar dengan "location ^~ @URLPATH@/".
+    # Nginx memilih prefix terpanjang, dan "@URLPATH@/uploads/" lebih panjang dari
+    # "@URLPATH@/" — jadi blok ini menang tanpa bergantung pada urutan penulisan.
+    # Tanda "^~" wajib: tanpa itu "location ~ \.php$" tetap menang dan file .php
+    # yang berhasil diselundupkan ke uploads/ akan tereksekusi.
+    location ^~ @URLPATH@/uploads/ {
         location ~* \.(php|phtml|phar|phps|cgi|pl|py|sh)$ {
             deny all;
         }
@@ -298,34 +312,39 @@ cat > "$NGINX_SNIPPET" <<'SNIPPET'
     }
     # ===== end survei =====
 SNIPPET
+sed -i "s#@URLPATH@#${URL_PATH}#g" "$NGINX_SNIPPET"
 
-if [[ $HAS_UPLOADS_BLOCK -eq 1 && $HAS_BODY_SIZE -eq 1 ]]; then
-    ok "client_max_body_size sudah ada"
-    ok "location ^~ /uploads/ sudah ada"
+if [[ $HAS_UPLOADS_BLOCK -eq 1 ]]; then
+    ok "location ^~ ${UPLOADS_LOC} sudah ada"
+    [[ $HAS_BODY_SIZE -eq 1 ]] && ok "client_max_body_size sudah ada" \
+        || warn "client_max_body_size belum ada → upload >1 MB akan kena 413"
 elif [[ $CHECK_ONLY -eq 1 || $PATCH_NGINX -eq 0 || -z "$SITE_FILE" ]]; then
-    [[ $HAS_BODY_SIZE     -eq 0 ]] && warn "client_max_body_size belum ada → upload >1 MB akan kena 413"
-    [[ $HAS_UPLOADS_BLOCK -eq 0 ]] && warn "location ^~ /uploads/ belum ada → LUBANG KEAMANAN: skrip di uploads/ bisa tereksekusi"
+    warn "location ^~ ${UPLOADS_LOC} belum ada → LUBANG KEAMANAN: skrip di uploads/ bisa tereksekusi"
+    [[ $HAS_BODY_SIZE -eq 0 ]] && warn "client_max_body_size belum ada → upload >1 MB akan kena 413"
     printf '\n'
-    info "Tambahkan blok berikut ke dalam server { ... } di ${SITE_FILE:-file server block Anda},"
-    info "sebelum 'location ~ \\.php\$' yang sudah ada:"
+    info "Tambahkan blok berikut ke dalam server { ... } di ${SITE_FILE:-file server block Anda}:"
     printf '%s\n' "$Y"
     cat "$NGINX_SNIPPET"
     printf '%s\n' "$N"
     info "Atau biarkan skrip yang menuliskannya: sudo $0 --patch-nginx"
 else
-    # Sisipkan sebelum 'location ~ \.php$'; kalau tidak ada, sebelum '}' terakhir
+    # Sisipkan tepat sebelum 'location ^~ /survei/'; kalau tidak ketemu,
+    # sebelum kurung tutup terakhir.
     NGINX_BAK="$SITE_FILE.bak-$(date +%F-%H%M%S)"
     cp -p "$SITE_FILE" "$NGINX_BAK"
 
-    awk '
+    # Pencocokan pakai index(), bukan regex: "^~" sulit di-escape lewat awk -v
+    # ("\^" berubah jadi jangkar regex dan polanya tidak pernah cocok).
+    awk -v marker="${URL_PATH}/" '
         FNR == NR { snippet = snippet $0 ORS; next }
-        !inserted && /location[[:space:]]*~[^{]*\.php/ { printf "%s", snippet; inserted = 1 }
+        !inserted && index($0, "location") && index($0, "^~") && index($0, marker) {
+            printf "%s", snippet; inserted = 1
+        }
         { print }
     ' "$NGINX_SNIPPET" "$SITE_FILE" > "$TMPDIR_DEPLOY/site.new" 2>/dev/null || true
 
-    # awk di atas hanya benar bila pola ditemukan; verifikasi hasilnya
-    if ! grep -qE 'location[[:space:]]*\^~[[:space:]]*/uploads/' "$TMPDIR_DEPLOY/site.new" 2>/dev/null; then
-        # Fallback: sisipkan sebelum kurung tutup terakhir
+    # awk di atas hanya menyisipkan bila pola ketemu; verifikasi hasilnya
+    if ! grep -qE "location[[:space:]]*\^~[[:space:]]*${UPLOADS_LOC}" "$TMPDIR_DEPLOY/site.new" 2>/dev/null; then
         head -n -1 "$SITE_FILE" > "$TMPDIR_DEPLOY/site.new"
         cat "$NGINX_SNIPPET" >> "$TMPDIR_DEPLOY/site.new"
         tail -n 1 "$SITE_FILE" >> "$TMPDIR_DEPLOY/site.new"
@@ -373,7 +392,7 @@ else
     info "Menguji $DOMAIN"
 
     # a. Endpoint hidup dan membalas JSON
-    BODY="$(curl -sS --max-time 15 "$DOMAIN/upload_image.php" 2>/dev/null || true)"
+    BODY="$(curl -sS --max-time 15 "$DOMAIN$URL_PATH/upload_image.php" 2>/dev/null || true)"
     if [[ "$BODY" == *'"success":false'* ]]; then
         ok "upload_image.php membalas JSON dengan benar"
     elif [[ -z "$BODY" ]]; then
@@ -385,7 +404,7 @@ else
     # b. UJI KEAMANAN — skrip di uploads/ tidak boleh tereksekusi
     CANARY="uploads/__deploy_check_$$.php"
     printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY"
-    RESP="$(curl -sS --max-time 15 "$DOMAIN/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
+    RESP="$(curl -sS --max-time 15 "$DOMAIN$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
     rm -f "$CANARY"; CANARY=""
 
     if [[ "$RESP" == *TEREKSEKUSI* ]]; then
@@ -396,7 +415,7 @@ else
     fi
 
     # c. File statis tetap tersaji
-    CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$DOMAIN/uploads/index.html" 2>/dev/null || echo 000)"
+    CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$DOMAIN$URL_PATH/uploads/index.html" 2>/dev/null || echo 000)"
     if [[ "$CODE" == "200" ]]; then
         ok "File statis di uploads/ tetap bisa diakses (HTTP 200)"
     else
