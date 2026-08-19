@@ -331,15 +331,57 @@ info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertam
 # ============================================================ 6. NGINX
 step "6/7  Sisipkan blok Nginx"
 
+# Config seperti ini hampir selalu punya DUA server block untuk domain yang sama:
+# satu "listen 80" yang cuma redirect ke HTTPS, dan satu "listen 443 ssl" yang
+# benar-benar melayani trafik. Menyisipkan ke yang pertama ketemu berarti blok
+# tidak pernah dilalui trafik HTTPS — gejalanya /survei/ tetap 404 padahal
+# instalasi mengaku sukses. Karena itu pemilihannya sadar-blok dan mendahulukan
+# blok ber-SSL.
+BLOCK_SCAN='
+    function block_start() {
+        in_server = 1; sdepth = depth; md = 0; ssl = 0
+    }
+    /^# configuration file / { file = $4; sub(/:$/, "", file); next }
+    {
+        line = $0
+        o = gsub(/\{/, "{", line)
+        c = gsub(/\}/, "}", line)
+
+        if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+            block_start(); blockfile = file
+        } else if (in_server) {
+            if ($0 ~ /^[[:space:]]*server_name/ && index($0, dom)) md = 1
+            if ($0 ~ /^[[:space:]]*listen/ && ($0 ~ /ssl/ || $0 ~ /443/)) ssl = 1
+        }
+
+        depth += o - c
+
+        if (in_server && depth <= sdepth) {
+            if (md) print ssl "\t" FNR "\t" blockfile
+            in_server = 0
+        }
+    }
+'
+
 if [[ -z "$SITE_FILE" ]]; then
     # "nginx -T" mencetak SELURUH config efektif beserta nama berkas asalnya,
-    # apa pun jalur include-nya. Ini lebih andal daripada menebak-nebak
-    # sites-enabled/ dan conf.d/ — server block bisa saja di-include dari
-    # tempat lain, atau ditulis langsung di nginx.conf.
-    SITE_FILE="$(nginx -T 2>/dev/null | awk -v dom="$DOMAIN" '
-        /^# configuration file / { f = $4; sub(/:$/, "", f); next }
-        /^[[:space:]]*server_name/ && index($0, dom) { print f; exit }
-    ' || true)"
+    # apa pun jalur include-nya — lebih andal daripada menebak sites-enabled/
+    # dan conf.d/, karena server block bisa di-include dari mana saja.
+    CANDIDATES="$(nginx -T 2>/dev/null | awk -v dom="$DOMAIN" "$BLOCK_SCAN" || true)"
+
+    if [[ -n "$CANDIDATES" ]]; then
+        # Kolom 1 = 1 kalau blok ber-SSL. Urut menurun supaya blok SSL menang.
+        SITE_FILE="$(printf '%s\n' "$CANDIDATES" | sort -k1,1nr | head -1 | cut -f3)"
+
+        SSL_COUNT="$(printf '%s\n' "$CANDIDATES" | awk -F'\t' '$1 == 1' | wc -l)"
+        TOTAL="$(printf '%s\n' "$CANDIDATES" | wc -l)"
+        if [[ "$SSL_COUNT" -eq 0 ]]; then
+            warn "Tidak ada server block ber-SSL untuk $DOMAIN — memakai blok non-SSL"
+            info "Kalau situs Anda dilayani lewat HTTPS, blok ini tidak akan pernah dilalui trafik."
+        else
+            info "$TOTAL server block memuat $DOMAIN; dipilih yang ber-SSL"
+        fi
+    fi
 fi
 
 if [[ -z "$SITE_FILE" ]]; then
@@ -380,6 +422,12 @@ sed -e "s#/var/www/aptpairport\.id#$NGINX_ROOT#g" \
         }
     ' > "$SNIPPET"
 
+STRIP_OLD='
+    index($0, s) { skip = 1 }
+    !skip { print }
+    index($0, e) { skip = 0 }
+'
+
 if [[ $CHECK_ONLY -eq 1 ]]; then
     if grep -qF "$MARK_START" "$SITE_FILE"; then
         ok "Blok survei sudah tersisip di $SITE_FILE"
@@ -387,48 +435,60 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
         warn "Blok survei BELUM tersisip di $SITE_FILE"
     fi
 else
+    # Bersihkan blok survei yang mungkin tersangkut di berkas LAIN — misalnya
+    # sisa jalan sebelumnya yang salah sasaran. Dua salinan di dua server block
+    # berbeda hanya akan membingungkan saat melacak masalah.
+    while IFS= read -r other; do
+        [[ -z "$other" || "$other" == "$SITE_FILE" ]] && continue
+        cp -p "$other" "$other.bak-$(date +%F-%H%M%S)"
+        awk -v s="$MARK_START" -v e="$MARK_END" "$STRIP_OLD" "$other" > "$TMP/other.new"
+        cat "$TMP/other.new" > "$other"
+        warn "Blok survei lama dibuang dari $other (salah sasaran)"
+    done < <(grep -rlF "$MARK_START" /etc/nginx/ 2>/dev/null || true)
+
     NGINX_BAK="$SITE_FILE.bak-$(date +%F-%H%M%S)"
     cp -p "$SITE_FILE" "$NGINX_BAK"
 
     # Buang blok lama (kalau ada) supaya idempoten, lalu sisipkan yang baru
-    # tepat sebelum kurung tutup server block yang memuat server_name domain.
-    awk -v s="$MARK_START" -v e="$MARK_END" '
-        index($0, s) { skip = 1 }
-        !skip { print }
-        index($0, e) { skip = 0 }
-    ' "$SITE_FILE" > "$TMP/site.stripped"
+    # tepat sebelum kurung tutup server block yang dipilih.
+    awk -v s="$MARK_START" -v e="$MARK_END" "$STRIP_OLD" "$SITE_FILE" > "$TMP/site.stripped"
 
+    # Dua lintasan: lintasan pertama menentukan server block mana yang jadi
+    # sasaran (utamakan yang ber-SSL), lintasan kedua menyisipkan snippet
+    # tepat sebelum kurung tutupnya.
     awk -v snippet_file="$SNIPPET" -v dom="$DOMAIN" '
         function emit_snippet(   line) {
             while ((getline line < snippet_file) > 0) print line
             close(snippet_file)
         }
-        {
+        NR == FNR {
             line = $0
+            o = gsub(/\{/, "{", line)
+            c = gsub(/\}/, "}", line)
 
-            # Hitung kedalaman kurung untuk mengenali batas server block.
-            open = gsub(/\{/, "{", line)
-            close_n = gsub(/\}/, "}", line)
-
-            if (depth == 0 && open > 0 && $0 ~ /server[[:space:]]*\{/) {
-                in_server = 1; found = 0
-            }
-            if (in_server && $0 ~ /^[[:space:]]*server_name/ && index($0, dom)) found = 1
-
-            newdepth = depth + open - close_n
-
-            # Baris yang menutup server block: sisipkan tepat sebelumnya.
-            if (in_server && found && depth > 0 && newdepth == 0) {
-                emit_snippet()
-                inserted = 1
+            if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                in_server = 1; sdepth = depth; md = 0; ssl = 0
+            } else if (in_server) {
+                if ($0 ~ /^[[:space:]]*server_name/ && index($0, dom)) md = 1
+                if ($0 ~ /^[[:space:]]*listen/ && ($0 ~ /ssl/ || $0 ~ /443/)) ssl = 1
             }
 
-            print $0
-            depth = newdepth
-            if (depth == 0) in_server = 0
+            depth += o - c
+
+            if (in_server && depth <= sdepth) {
+                if (md) {
+                    if (ssl && !ssl_end) ssl_end = FNR
+                    if (!any_end) any_end = FNR
+                }
+                in_server = 0
+            }
+            next
         }
+        FNR == 1 { target = ssl_end ? ssl_end : any_end }
+        FNR == target { emit_snippet(); inserted = 1 }
+        { print }
         END { exit(inserted ? 0 : 1) }
-    ' "$TMP/site.stripped" > "$TMP/site.new" \
+    ' "$TMP/site.stripped" "$TMP/site.stripped" > "$TMP/site.new" \
         || die "Tidak menemukan penutup server block untuk $DOMAIN di $SITE_FILE — sisipkan manual dari deploy/nginx-survei-subpath.conf"
 
     cat "$TMP/site.new" > "$SITE_FILE"
