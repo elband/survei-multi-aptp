@@ -477,7 +477,7 @@ else
         awk -v s="$MARK_START" -v e="$MARK_END" "$STRIP_OLD" "$other" > "$TMP/other.new"
         cat "$TMP/other.new" > "$other"
         warn "Blok survei lama dibuang dari $other (salah sasaran)"
-    done < <(grep -rlF "$MARK_START" /etc/nginx/ 2>/dev/null || true)
+    done < <(grep -rlF "$MARK_START" /etc/nginx/ 2>/dev/null                 | grep -vE '\.(bak|disabled|rusak|orig|save|dpkg-[a-z]+)' || true)
 
     # Rekam kondisi situs utama SEBELUM apa pun diubah, supaya kerusakan bisa
     # dikenali dan dibatalkan sendiri. Menyisipkan blok ke server block yang
@@ -494,6 +494,26 @@ else
     # Buang blok lama (kalau ada) supaya idempoten, lalu sisipkan yang baru
     # tepat sebelum kurung tutup server block yang dipilih.
     awk -v s="$MARK_START" -v e="$MARK_END" "$STRIP_OLD" "$SITE_FILE" > "$TMP/site.stripped"
+
+    # Blok "location $URL_PATH/" yang sudah ada di config tapi TIDAK bertanda
+    # marker skrip ini (mis. sisa pemasangan lama atau tulisan tangan) tidak
+    # ikut terbuang, dan Nginx menolak dua location dengan path sama:
+    #   [emerg] duplicate location "$URL_PATH/"
+    # Lebih baik berhenti dan minta manusia memutuskan daripada menghapus
+    # konfigurasi yang mungkin sengaja ditulis.
+    DUP="$(grep -nE "^[[:space:]]*location[[:space:]]+[^{]*${URL_PATH}/" "$TMP/site.stripped" || true)"
+    if [[ -n "$DUP" ]]; then
+        printf '
+'
+        info "Sudah ada blok location $URL_PATH/ di $SITE_FILE:"
+        printf '      %s
+' "$DUP"
+        printf '
+'
+        info "Hapus blok itu dulu (lihat backup: $SITE_FILE.bak-*), lalu jalankan skrip ini lagi."
+        info "Blok pengganti yang teruji ada di deploy/nginx-survei-subpath.conf."
+        die "Menolak menyisipkan — akan bentrok: duplicate location \"$URL_PATH/\""
+    fi
 
     # Dua lintasan: lintasan pertama menentukan server block mana yang jadi
     # sasaran (utamakan yang ber-SSL), lintasan kedua menyisipkan snippet
