@@ -27,6 +27,8 @@
 #   --site FILE        server block Nginx       (default: dideteksi dari server_name)
 #   --repo URL         sumber clone kalau folder masih kosong
 #   --php-sock PATH    socket PHP-FPM           (default: dideteksi otomatis)
+#   --replace-location ganti blok "location /survei/" yang sudah ada dengan
+#                      versi dari deploy/nginx-survei-subpath.conf
 #
 set -euo pipefail
 
@@ -39,6 +41,7 @@ BLOCK_INSTALLED=0
 REPO_URL="https://github.com/elband/survei-multi-aptp.git"
 PHP_SOCK=""
 CHECK_ONLY=0
+REPLACE_LOCATION=0
 
 MARK_START="    # ===== survei: mulai ====="
 MARK_END="    # ===== survei: selesai ====="
@@ -66,6 +69,7 @@ while [[ $# -gt 0 ]]; do
         --repo)      REPO_URL="${2:?--repo butuh URL}"; shift 2 ;;
         --php-sock)  PHP_SOCK="${2:?--php-sock butuh path}"; shift 2 ;;
         --check)     CHECK_ONLY=1; shift ;;
+        --replace-location) REPLACE_LOCATION=1; shift ;;
         -h|--help)   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)           die "Opsi tidak dikenal: $1  (pakai --help)" ;;
     esac
@@ -502,7 +506,7 @@ else
     # Lebih baik berhenti dan minta manusia memutuskan daripada menghapus
     # konfigurasi yang mungkin sengaja ditulis.
     DUP="$(grep -nE "^[[:space:]]*location[[:space:]]+[^{]*${URL_PATH}/" "$TMP/site.stripped" || true)"
-    if [[ -n "$DUP" ]]; then
+    if [[ -n "$DUP" && $REPLACE_LOCATION -eq 0 ]]; then
         printf '
 '
         info "Sudah ada blok location $URL_PATH/ di $SITE_FILE:"
@@ -510,9 +514,29 @@ else
 ' "$DUP"
         printf '
 '
-        info "Hapus blok itu dulu (lihat backup: $SITE_FILE.bak-*), lalu jalankan skrip ini lagi."
-        info "Blok pengganti yang teruji ada di deploy/nginx-survei-subpath.conf."
+        info "Periksa isinya dulu. Kalau blok itu memang mau diganti versi teruji"
+        info "dari deploy/nginx-survei-subpath.conf, ulangi dengan --replace-location."
+        info "Isi lamanya tetap tersimpan di $SITE_FILE.bak-*"
         die "Menolak menyisipkan — akan bentrok: duplicate location \"$URL_PATH/\""
+    elif [[ -n "$DUP" ]]; then
+        # Buang blok lama seutuhnya, dari baris "location ... /survei/ {" sampai
+        # kurung tutup pasangannya. Penghitungan kurung dipakai supaya location
+        # bersarang di dalamnya ikut terangkat, bukan menyisakan kurung yatim.
+        info "Mengganti blok location $URL_PATH/ yang sudah ada:"
+        printf '      %s
+' "$DUP"
+        awk -v pat="^[[:space:]]*location[[:space:]]+[^{]*${URL_PATH}/" '
+            function braces(s,   t, o, c) {
+                t = s; o = gsub(/\{/, "{", t)
+                t = s; c = gsub(/\}/, "}", t)
+                return o - c
+            }
+            !rm && $0 ~ pat { rm = 1; d = 0 }
+            rm { d += braces($0); if (d <= 0) rm = 0; next }
+            { print }
+        ' "$TMP/site.stripped" > "$TMP/site.nodup"
+        mv "$TMP/site.nodup" "$TMP/site.stripped"
+        warn "Blok $URL_PATH/ lama dibuang — isi sebelumnya ada di $NGINX_BAK"
     fi
 
     # Dua lintasan: lintasan pertama menentukan server block mana yang jadi
