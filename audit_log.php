@@ -278,7 +278,7 @@ function badgeIcon($action) {
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="logo-area">
-            <img src="https://aptpairport.id/assets_landing/img/logo/logo-apt.svg" alt="Logo">
+            <img src="assets/images/logo-apt.svg" alt="Logo">
             <h2>Admin Panel</h2>
             <p class="sidebar-sub">Survei APT Pranoto</p>
         </div>

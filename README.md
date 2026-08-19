@@ -33,6 +33,15 @@ Pastikan lingkungan lokal atau server Anda memiliki:
 
 ## 🚀 Cara Instalasi & Penggunaan
 
+> **Deploy ke server produksi?** Panduan lokal di bawah ini untuk XAMPP/Laragon.
+> Untuk server sungguhan, pakai dokumen khusus berikut:
+>
+> | Situasi | Dokumen |
+> |---|---|
+> | Pasang **dari nol** di akar domain (Nginx + PHP-FPM) | [`INSTALL.md`](INSTALL.md) + `install.sh` |
+> | **Update** instalasi yang sudah jalan | [`DEPLOY.md`](DEPLOY.md) + `deploy.sh` |
+> | Server block Nginx siap pakai | [`deploy/nginx-aptpairport.id.conf`](deploy/nginx-aptpairport.id.conf) |
+
 Ikuti langkah-langkah mudah di bawah ini untuk menjalankan aplikasi pada PC atau *server* Anda:
 
 ### 1. Unduh / Clone Repository

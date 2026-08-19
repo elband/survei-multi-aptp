@@ -186,7 +186,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     <div class="login-wrapper">
         <div class="login-card">
             <div class="login-header">
-                <img src="https://aptpairport.id/assets_landing/img/logo/logo-apt.svg" alt="APT Pranoto Logo">
+                <img src="assets/images/logo-apt.svg" alt="APT Pranoto Logo">
                 <h1>Admin Panel</h1>
                 <p>Silakan masuk untuk mengelola survei</p>
             </div>

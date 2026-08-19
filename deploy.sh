@@ -16,8 +16,8 @@
 #
 # Opsi lain:
 #   --project DIR     path proyek yang dilayani Nginx
-#                     (default: /var/www/aptpairport.id/dasboardwebutama/public/survei)
-#   --url-path P      sub-path URL aplikasi (default: /survei)
+#                     (default: /var/www/aptpairport.id/survei)
+#   --url-path P      sub-path URL aplikasi (default: / — aplikasi di akar domain)
 #   --domain URL      base URL verifikasi (default: dibaca dari server_name Nginx)
 #   --site FILE       file server block Nginx (default: dideteksi dari location ^~)
 #   --skip-backup     lewati backup tar + mysqldump
@@ -25,13 +25,14 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------- konfigurasi
-# Folder yang BENAR-BENAR dilayani Nginx. Bukan /var/www/aptpairport.id/survei —
-# itu clone lama yang tidak tersambung ke web server.
-PROJECT_DIR="/var/www/aptpairport.id/dasboardwebutama/public/survei"
+# Folder yang dilayani Nginx sebagai document root. Instalasi baru dibuat oleh
+# install.sh dengan tata letak ini; ubah lewat --project kalau berbeda.
+PROJECT_DIR="/var/www/aptpairport.id/survei"
 
-# Path URL aplikasi. Nginx memakai 'root .../public' + 'location ^~ /survei/',
-# jadi aplikasi tidak berada di akar domain.
-URL_PATH="/survei"
+# Aplikasi berada di AKAR domain, jadi tidak ada sub-path. Kosong, bukan "/",
+# supaya "${URL_PATH}/uploads/" tetap menghasilkan "/uploads/".
+URL_PATH=""
+DOMAIN_NAME="aptpairport.id"
 
 DOMAIN=""
 SITE_FILE=""
@@ -272,11 +273,17 @@ info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertam
 # ======================================================= 5. KONFIG NGINX
 step "5/7  Konfigurasi Nginx"
 
-# Cari server block yang memuat 'location ^~ /survei/' (aplikasi ada di sub-path,
-# jadi 'root' menunjuk ke folder induk, bukan ke folder proyek).
+# Cari server block yang melayani aplikasi ini.
 if [[ -z "$SITE_FILE" ]]; then
-    SITE_FILE="$(grep -rlE "location[[:space:]]*\^~[[:space:]]*${URL_PATH}/" \
-        /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+    if [[ -n "$URL_PATH" ]]; then
+        # Instalasi sub-path: kenali dari blok "location ^~ /subpath/".
+        SITE_FILE="$(grep -rlE "location[[:space:]]*\^~[[:space:]]*${URL_PATH}/" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+    else
+        # Di akar domain tidak ada sub-path yang bisa dicari, dan "location ^~ /"
+        # terlalu umum. Kenali dari document root, lalu dari server_name.
+        SITE_FILE="$(grep -rlF "root  $PROJECT_DIR;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+        [[ -z "$SITE_FILE" ]] && SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*${DOMAIN_NAME//./\.}" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+    fi
 fi
 
 UPLOADS_LOC="${URL_PATH}/uploads/"

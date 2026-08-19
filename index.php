@@ -18,7 +18,7 @@ if ($survey_id > 0) {
     $survey = $stmt->fetch();
 
     if (!$survey && $status !== 'success') {
-        showErrorPage("Tidak Ditemukan", "Survei tidak ditemukan atau sudah tidak aktif.", "https://aptpairport.id/", "Kembali ke Beranda");
+        showErrorPage("Tidak Ditemukan", "Survei tidak ditemukan atau sudah tidak aktif.", "/", "Kembali ke Beranda");
     }
 }
 ?>
@@ -51,7 +51,7 @@ if ($survey_id > 0) {
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
-            <img src="https://aptpairport.id/assets_landing/img/logo/logo-apt.svg" alt="APT Pranoto Logo" class="logo">
+            <img src="assets/images/logo-apt.svg" alt="APT Pranoto Logo" class="logo">
             <h1>
                 <?php echo htmlspecialchars($survey['title'] ?? 'Survei'); ?>
             </h1>
