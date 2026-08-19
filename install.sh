@@ -338,7 +338,23 @@ step "6/7  Sisipkan blok Nginx"
 # tidak pernah dilalui trafik HTTPS — gejalanya /survei/ tetap 404 padahal
 # instalasi mengaku sukses. Karena itu pemilihannya sadar-blok dan mendahulukan
 # blok ber-SSL.
-BLOCK_SCAN='
+# server_name dicocokkan per TOKEN, bukan substring. "index($0, dom)" membuat
+# "server_name sikeren.aptpairport.id;" ikut cocok dengan "aptpairport.id",
+# sehingga blok milik subdomain lain jadi sasaran penyisipan.
+AWK_NAME_MATCH='
+    function name_matches(line, dom,   i, n, arr, t) {
+        sub(/;.*$/, "", line)
+        sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+        n = split(line, arr, /[[:space:]]+/)
+        for (i = 1; i <= n; i++) {
+            t = arr[i]
+            if (t == dom || t == "www." dom) return 1
+        }
+        return 0
+    }
+'
+
+BLOCK_SCAN="$AWK_NAME_MATCH"'
     function block_start() {
         in_server = 1; sdepth = depth; md = 0; ssl = 0
     }
@@ -351,7 +367,7 @@ BLOCK_SCAN='
         if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
             block_start(); blockfile = file
         } else if (in_server) {
-            if ($0 ~ /^[[:space:]]*server_name/ && index($0, dom)) md = 1
+            if ($0 ~ /^[[:space:]]*server_name/ && name_matches($0, dom)) md = 1
             if ($0 ~ /^[[:space:]]*listen/ && ($0 ~ /ssl/ || $0 ~ /443/)) ssl = 1
         }
 
@@ -387,7 +403,7 @@ fi
 
 if [[ -z "$SITE_FILE" ]]; then
     # Cadangan: sisir seluruh /etc/nginx, bukan hanya dua folder biasa.
-    SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*[[:space:].]${DOMAIN//./\\.}([[:space:];]|$)" \
+    SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*[[:space:]]${DOMAIN//./\\.}([[:space:];]|$)" \
         /etc/nginx/ 2>/dev/null | head -1 || true)"
 fi
 
@@ -448,6 +464,12 @@ else
         warn "Blok survei lama dibuang dari $other (salah sasaran)"
     done < <(grep -rlF "$MARK_START" /etc/nginx/ 2>/dev/null || true)
 
+    # Rekam kondisi situs utama SEBELUM apa pun diubah, supaya kerusakan bisa
+    # dikenali dan dibatalkan sendiri. Menyisipkan blok ke server block yang
+    # salah pernah membuat situs utama hilang — jaring ini menangkap kasus itu.
+    MAIN_BEFORE="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
+    info "Situs utama sebelum perubahan: HTTP $MAIN_BEFORE"
+
     NGINX_BAK="$SITE_FILE.bak-$(date +%F-%H%M%S)"
     cp -p "$SITE_FILE" "$NGINX_BAK"
 
@@ -458,7 +480,7 @@ else
     # Dua lintasan: lintasan pertama menentukan server block mana yang jadi
     # sasaran (utamakan yang ber-SSL), lintasan kedua menyisipkan snippet
     # tepat sebelum kurung tutupnya.
-    awk -v snippet_file="$SNIPPET" -v dom="$DOMAIN" '
+    awk -v snippet_file="$SNIPPET" -v dom="$DOMAIN" "$AWK_NAME_MATCH"'
         function emit_snippet(   line) {
             while ((getline line < snippet_file) > 0) print line
             close(snippet_file)
@@ -471,7 +493,7 @@ else
             if (!in_server && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
                 in_server = 1; sdepth = depth; md = 0; ssl = 0
             } else if (in_server) {
-                if ($0 ~ /^[[:space:]]*server_name/ && index($0, dom)) md = 1
+                if ($0 ~ /^[[:space:]]*server_name/ && name_matches($0, dom)) md = 1
                 if ($0 ~ /^[[:space:]]*listen/ && ($0 ~ /ssl/ || $0 ~ /443/)) ssl = 1
             }
 
@@ -500,6 +522,19 @@ else
         systemctl reload nginx
         ok "Nginx di-reload"
         BLOCK_INSTALLED=1
+
+        # "nginx -t" hanya memeriksa sintaks — ia tidak tahu situs utama jadi
+        # salah sasaran. Karena itu diuji sungguhan lewat HTTP.
+        MAIN_AFTER="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
+        if [[ "$MAIN_BEFORE" == "200" && "$MAIN_AFTER" != "200" ]]; then
+            cp -p "$NGINX_BAK" "$SITE_FILE"
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx
+            BLOCK_INSTALLED=0
+            printf '
+'
+            die "Situs utama rusak setelah perubahan (HTTP $MAIN_BEFORE -> $MAIN_AFTER) — config SUDAH dikembalikan dan Nginx di-reload ulang"
+        fi
+        ok "Situs utama tetap HTTP $MAIN_AFTER setelah perubahan"
     else
         cp -p "$NGINX_BAK" "$SITE_FILE"
         printf '\n'; cat "$TMP/nginx.err"
