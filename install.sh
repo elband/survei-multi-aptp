@@ -332,11 +332,30 @@ info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertam
 step "6/7  Sisipkan blok Nginx"
 
 if [[ -z "$SITE_FILE" ]]; then
-    SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*(^|[[:space:].])${DOMAIN//./\\.}([[:space:];]|$)" \
-        /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+    # "nginx -T" mencetak SELURUH config efektif beserta nama berkas asalnya,
+    # apa pun jalur include-nya. Ini lebih andal daripada menebak-nebak
+    # sites-enabled/ dan conf.d/ — server block bisa saja di-include dari
+    # tempat lain, atau ditulis langsung di nginx.conf.
+    SITE_FILE="$(nginx -T 2>/dev/null | awk -v dom="$DOMAIN" '
+        /^# configuration file / { f = $4; sub(/:$/, "", f); next }
+        /^[[:space:]]*server_name/ && index($0, dom) { print f; exit }
+    ' || true)"
 fi
-[[ -n "$SITE_FILE" && -f "$SITE_FILE" ]] \
-    || die "Server block untuk $DOMAIN tidak terdeteksi. Tentukan manual: --site /etc/nginx/sites-available/NAMA"
+
+if [[ -z "$SITE_FILE" ]]; then
+    # Cadangan: sisir seluruh /etc/nginx, bukan hanya dua folder biasa.
+    SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*[[:space:].]${DOMAIN//./\\.}([[:space:];]|$)" \
+        /etc/nginx/ 2>/dev/null | head -1 || true)"
+fi
+
+if [[ -z "$SITE_FILE" || ! -f "$SITE_FILE" ]]; then
+    printf '\n'
+    info "Server block yang memuat '$DOMAIN' tidak ditemukan. Cari manual dengan:"
+    info "  sudo nginx -T | awk '/^# configuration file/{f=\$4} /server_name/ && /$DOMAIN/{print f\" -> \"\$0}'"
+    info "  sudo grep -rn server_name /etc/nginx/ | grep $DOMAIN"
+    printf '\n'
+    die "Tentukan manual: --site /etc/nginx/sites-available/NAMA"
+fi
 
 # Symlink di sites-enabled/ -> sunting berkas aslinya di sites-available/.
 [[ -L "$SITE_FILE" ]] && SITE_FILE="$(readlink -f "$SITE_FILE")"
