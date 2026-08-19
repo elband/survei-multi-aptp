@@ -305,13 +305,26 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
     ok "Kode read-only untuk $FPM_USER; uploads/ dimiliki $FPM_USER"
 fi
 
-sudo -u "$FPM_USER" test -w "$PROJECT_DIR/uploads" \
-    && ok "uploads/ writable oleh $FPM_USER" \
-    || die "uploads/ TIDAK writable oleh $FPM_USER — semua upload akan gagal"
+# Dalam mode --check tidak ada yang diperbaiki, jadi kedua temuan di bawah cukup
+# jadi peringatan: jalan normal memang memperbaikinya sendiri. Menghentikan
+# pemeriksaan di sini justru menyembunyikan langkah 6 dan 7 dari pengguna.
+if [[ ! -d "$PROJECT_DIR/uploads" ]]; then
+    warn "uploads/ belum ada — akan dibuat saat dijalankan tanpa --check"
+elif sudo -u "$FPM_USER" test -w "$PROJECT_DIR/uploads"; then
+    ok "uploads/ writable oleh $FPM_USER"
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+    warn "uploads/ belum writable oleh $FPM_USER — diperbaiki saat dijalankan tanpa --check"
+else
+    die "uploads/ TIDAK writable oleh $FPM_USER — semua upload akan gagal"
+fi
 
-sudo -u "$FPM_USER" test -r "$ENV_FILE" \
-    && ok "$ENV_FILE terbaca oleh $FPM_USER" \
-    || die "$ENV_FILE tidak terbaca oleh $FPM_USER — koneksi database akan jatuh ke nilai default"
+if sudo -u "$FPM_USER" test -r "$ENV_FILE"; then
+    ok "$ENV_FILE terbaca oleh $FPM_USER"
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+    warn "$ENV_FILE belum terbaca oleh $FPM_USER — izinnya diperbaiki saat dijalankan tanpa --check"
+else
+    die "$ENV_FILE tidak terbaca oleh $FPM_USER — koneksi database akan jatuh ke nilai default"
+fi
 
 info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertama."
 
@@ -455,14 +468,21 @@ else
     # dieksekusi. Aturan deny WAJIB bersarang di dalam blok uploads — versi
     # sejajar dilewati Nginx karena blok uploads memakai "^~".
     CANARY="$PROJECT_DIR/uploads/__install_check_$$.php"
-    printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY"
-    RESP="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
-    rm -f "$CANARY"; CANARY=""
-    if [[ "$RESP" == *TEREKSEKUSI* ]]; then
-        printf '\n'
-        die "BAHAYA: .php di uploads/ tersaji/tereksekusi — blok deny bersarang belum aktif"
+    if printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY" 2>/dev/null; then
+        RESP="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
+        rm -f "$CANARY"; CANARY=""
+        if [[ "$RESP" == *TEREKSEKUSI* ]]; then
+            printf '\n'
+            die "BAHAYA: .php di uploads/ tersaji/tereksekusi — blok deny bersarang belum aktif"
+        fi
+        ok "uploads/ menolak berkas .php"
+    else
+        # uploads/ belum writable (biasanya saat --check sebelum instalasi).
+        # Jangan biarkan "set -e" mematikan skrip hanya karena uji ini.
+        CANARY=""
+        warn "Tidak bisa menulis berkas uji ke uploads/ — uji eksekusi .php DILEWATI"
+        info "Uji ini wajib lulus sebelum situs dianggap aman. Ulangi setelah instalasi."
     fi
-    ok "uploads/ menolak berkas .php"
 
     C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/uploads/index.html" 2>/dev/null || echo 000)"
     [[ "$C" == "200" ]] && ok "Berkas statis di uploads/ tetap tersaji" \
