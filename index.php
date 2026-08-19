@@ -18,7 +18,7 @@ if ($survey_id > 0) {
     $survey = $stmt->fetch();
 
     if (!$survey && $status !== 'success') {
-        showErrorPage("Tidak Ditemukan", "Survei tidak ditemukan atau sudah tidak aktif.", "/", "Kembali ke Beranda");
+        showErrorPage("Tidak Ditemukan", "Survei tidak ditemukan atau sudah tidak aktif.", "https://aptpairport.id/", "Kembali ke Beranda");
     }
 }
 ?>

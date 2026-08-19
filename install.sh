@@ -1,36 +1,46 @@
 #!/usr/bin/env bash
 #
-# install.sh — Pasang Aplikasi Survei APT Pranoto dari NOL di AKAR DOMAIN
-#              (Nginx + PHP-FPM + MySQL/MariaDB, Debian/Ubuntu)
+# install.sh — Pasang Aplikasi Survei APT Pranoto dari NOL di SUB-PATH
+#              https://aptpairport.id/survei/   (Nginx + PHP-FPM + MySQL)
 #
-# Berbeda dari deploy.sh yang hanya meng-update instalasi lama, skrip ini
-# menyiapkan instalasi baru: cek dependensi, siapkan folder, tulis server block
-# Nginx untuk akar domain, pasang izin, verifikasi database, lalu uji hasilnya.
+# Situs utama di "/" TIDAK disentuh. Skrip hanya MENYISIPKAN satu blok
+# "location ^~ /survei/" ke server block yang sudah melayani domain itu.
+#
+# Berbeda dari deploy.sh yang meng-update instalasi yang sudah jalan, skrip ini
+# menyiapkan instalasi baru: cek dependensi, siapkan folder & izin, verifikasi
+# database, sisipkan config Nginx, lalu uji hasilnya termasuk uji keamanan.
 #
 # Database dianggap SUDAH ADA. Skrip hanya menyambung, memeriksa tabel, dan
 # mengimpor database/database.sql kalau ada tabel yang belum terbentuk.
 #
+# Skrip ini idempoten: aman dijalankan berulang kali.
+#
 # Pemakaian:
-#   sudo ./install.sh                       # pasang; berhenti kalau domain dipakai situs lain
-#   sudo ./install.sh --replace-existing    # nonaktifkan server block lain di domain yang sama
-#   sudo ./install.sh --check               # hanya periksa, tidak mengubah apa pun
+#   sudo ./install.sh --check      # hanya periksa & laporkan, tidak mengubah apa pun
+#   sudo ./install.sh              # pasang
 #
 # Opsi:
-#   --domain NAMA      domain situs            (default: aptpairport.id)
-#   --project DIR      document root aplikasi  (default: /var/www/DOMAIN/survei)
-#   --env-file FILE    lokasi kredensial       (default: survei.env satu level di atas proyek)
-#   --repo URL         sumber clone kalau --project masih kosong
-#   --php-sock PATH    socket PHP-FPM          (default: dideteksi otomatis)
+#   --domain NAMA      domain situs             (default: aptpairport.id)
+#   --url-path P       sub-path URL             (default: /survei)
+#   --project DIR      folder aplikasi          (default: /var/www/DOMAIN/survei)
+#   --env-file FILE    lokasi kredensial        (default: /var/www/survei.env)
+#   --site FILE        server block Nginx       (default: dideteksi dari server_name)
+#   --repo URL         sumber clone kalau folder masih kosong
+#   --php-sock PATH    socket PHP-FPM           (default: dideteksi otomatis)
 #
 set -euo pipefail
 
 DOMAIN="aptpairport.id"
+URL_PATH="/survei"
 PROJECT_DIR=""
-ENV_FILE=""
+ENV_FILE="/var/www/survei.env"
+SITE_FILE=""
 REPO_URL="https://github.com/elband/survei-multi-aptp.git"
 PHP_SOCK=""
-REPLACE_EXISTING=0
 CHECK_ONLY=0
+
+MARK_START="    # ===== survei: mulai ====="
+MARK_END="    # ===== survei: selesai ====="
 
 if [[ -t 1 ]]; then
     R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[34m'; BOLD=$'\e[1m'; N=$'\e[0m'
@@ -47,38 +57,50 @@ info() { printf '    %s\n' "$*"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --domain)            DOMAIN="${2:?--domain butuh nama domain}"; shift 2 ;;
-        --project)           PROJECT_DIR="${2:?--project butuh path}"; shift 2 ;;
-        --env-file)          ENV_FILE="${2:?--env-file butuh path}"; shift 2 ;;
-        --repo)              REPO_URL="${2:?--repo butuh URL}"; shift 2 ;;
-        --php-sock)          PHP_SOCK="${2:?--php-sock butuh path}"; shift 2 ;;
-        --replace-existing)  REPLACE_EXISTING=1; shift ;;
-        --check)             CHECK_ONLY=1; shift ;;
-        -h|--help)           sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *)                   die "Opsi tidak dikenal: $1  (pakai --help)" ;;
+        --domain)    DOMAIN="${2:?--domain butuh nama domain}"; shift 2 ;;
+        --url-path)  URL_PATH="/${2#/}"; URL_PATH="${URL_PATH%/}"; shift 2 ;;
+        --project)   PROJECT_DIR="${2:?--project butuh path}"; shift 2 ;;
+        --env-file)  ENV_FILE="${2:?--env-file butuh path}"; shift 2 ;;
+        --site)      SITE_FILE="${2:?--site butuh path}"; shift 2 ;;
+        --repo)      REPO_URL="${2:?--repo butuh URL}"; shift 2 ;;
+        --php-sock)  PHP_SOCK="${2:?--php-sock butuh path}"; shift 2 ;;
+        --check)     CHECK_ONLY=1; shift ;;
+        -h|--help)   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)           die "Opsi tidak dikenal: $1  (pakai --help)" ;;
     esac
 done
 
-: "${PROJECT_DIR:=/var/www/$DOMAIN/survei}"
-: "${ENV_FILE:=$(dirname "$PROJECT_DIR")/survei.env}"
-SITE_FILE="/etc/nginx/sites-available/$DOMAIN"
-SITE_LINK="/etc/nginx/sites-enabled/$DOMAIN"
+[[ -n "$URL_PATH" ]] || die "--url-path tidak boleh kosong — skrip ini untuk instalasi sub-path"
+URL_SEG="${URL_PATH#/}"
+: "${PROJECT_DIR:=/var/www/$DOMAIN/$URL_SEG}"
+NGINX_ROOT="$(dirname "$PROJECT_DIR")"
 
 [[ $EUID -eq 0 ]] || die "Jalankan sebagai root: sudo $0 $*"
+
+# "root NGINX_ROOT" memetakan /survei/x.php -> NGINX_ROOT/survei/x.php, jadi nama
+# folder terakhir WAJIB sama dengan segmen URL. Kalau tidak, harus pakai "alias"
+# yang merusak SCRIPT_FILENAME milik PHP.
+[[ "$(basename "$PROJECT_DIR")" == "$URL_SEG" ]] \
+    || die "Nama folder proyek harus '$URL_SEG' agar cocok dengan URL $URL_PATH/ (sekarang: $(basename "$PROJECT_DIR"))"
+
+case "$ENV_FILE" in
+    "$NGINX_ROOT"/*) die "$ENV_FILE berada di dalam document root ($NGINX_ROOT) — pindahkan ke luar, mis. /var/www/survei.env" ;;
+esac
 
 TMP="$(mktemp -d)"
 CANARY=""
 cleanup() { [[ -n "$CANARY" && -f "$CANARY" ]] && rm -f "$CANARY"; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-printf '%s\n' "${BOLD}Instalasi Survei APT Pranoto — akar domain${N}"
-info "Domain : https://$DOMAIN/"
+printf '%s\n' "${BOLD}Instalasi Survei APT Pranoto — sub-path${N}"
+info "URL    : https://$DOMAIN$URL_PATH/"
 info "Proyek : $PROJECT_DIR"
+info "Root   : $NGINX_ROOT   (dipakai direktif 'root' di dalam location)"
 info "Env    : $ENV_FILE"
 [[ $CHECK_ONLY -eq 1 ]] && info "Mode   : ${Y}CHECK ONLY — tidak ada yang diubah${N}"
 
 # ========================================================== 1. DEPENDENSI
-step "1/8  Dependensi sistem"
+step "1/7  Dependensi sistem"
 
 command -v nginx >/dev/null || die "nginx tidak ada — apt install nginx"
 command -v php   >/dev/null || die "php CLI tidak ada — apt install php-fpm php-mysql php-gd"
@@ -145,44 +167,10 @@ FPM_USER="$(ps -eo user:32,comm | awk '$2 ~ /^php-fpm/ && $1 != "root" {print $1
 id "$FPM_USER" >/dev/null 2>&1 || die "User PHP-FPM '$FPM_USER' tidak ada di sistem"
 ok "User PHP-FPM: $FPM_USER"
 
-# ======================================================== 2. SITUS LAMA
-step "2/8  Situs lain di $DOMAIN"
+# ===================================================== 2. KODE APLIKASI
+step "2/7  Kode aplikasi"
 
-DOM_RE="${DOMAIN//./\\.}"
-CONFLICTS="$(grep -rlE "^[[:space:]]*server_name[^;]*(^|[[:space:].])${DOM_RE}([[:space:];]|\$)" \
-    /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null \
-    | grep -v "^${SITE_LINK}\$" || true)"
-
-if [[ -z "$CONFLICTS" ]]; then
-    ok "Tidak ada server block lain yang memakai $DOMAIN"
-else
-    printf '\n'
-    info "Server block lain yang melayani $DOMAIN:"
-    printf '      %s\n' $CONFLICTS
-    printf '\n'
-    if [[ $CHECK_ONLY -eq 1 ]]; then
-        warn "dilewati (--check)"
-    elif [[ $REPLACE_EXISTING -eq 1 ]]; then
-        for f in $CONFLICTS; do
-            if [[ -L "$f" ]]; then
-                rm -f "$f"
-                ok "Symlink dilepas: $f"
-            else
-                mv "$f" "${f}.disabled-$(date +%F-%H%M%S)"
-                ok "Dinonaktifkan: $f -> ${f}.disabled-*"
-            fi
-        done
-        info "Situs lama tidak lagi dilayani. Foldernya TIDAK dihapus — masih bisa dipulihkan."
-    else
-        info "Situs lama masih aktif dan akan bentrok dengan instalasi ini."
-        die "Ulangi dengan --replace-existing kalau memang mau menggantinya"
-    fi
-fi
-
-# ===================================================== 3. KODE APLIKASI
-step "3/8  Kode aplikasi"
-
-[[ $CHECK_ONLY -eq 0 ]] && mkdir -p "$(dirname "$PROJECT_DIR")"
+[[ $CHECK_ONLY -eq 0 ]] && mkdir -p "$NGINX_ROOT"
 
 if [[ -f "$PROJECT_DIR/index.php" && -f "$PROJECT_DIR/db.php" ]]; then
     ok "Kode sudah ada di $PROJECT_DIR"
@@ -194,13 +182,14 @@ else
     ok "Clone selesai: $(git -C "$PROJECT_DIR" log --oneline -1)"
 fi
 
-for f in index.php db.php login.php admin.php upload_image.php image_lib.php database/database.sql; do
+for f in index.php db.php login.php admin.php upload_image.php image_lib.php \
+         database/database.sql deploy/nginx-survei-subpath.conf; do
     [[ -f "$PROJECT_DIR/$f" ]] || die "Berkas wajib hilang: $PROJECT_DIR/$f"
 done
 ok "Berkas inti lengkap"
 
-# ======================================================== 4. KREDENSIAL
-step "4/8  Kredensial (di luar document root)"
+# ======================================================== 3. KREDENSIAL
+step "3/7  Kredensial (di luar document root)"
 
 # db.php mencari berkas bernama persis 'survei.env' di folder-folder induk.
 if [[ "$(basename "$ENV_FILE")" != "survei.env" ]]; then
@@ -215,7 +204,7 @@ elif [[ $CHECK_ONLY -eq 1 ]]; then
 elif [[ -f "$PROJECT_DIR/.env" ]]; then
     cp "$PROJECT_DIR/.env" "$ENV_FILE"
     ok "Disalin dari $PROJECT_DIR/.env -> $ENV_FILE"
-    info "Salinan di dalam document root sebaiknya dihapus setelah instalasi terbukti jalan."
+    info "Salinan di dalam folder aplikasi sebaiknya dihapus setelah terbukti jalan."
 else
     umask 077
     cat > "$ENV_FILE" <<'ENVTPL'
@@ -258,8 +247,8 @@ DB_PORT="$(env_get DB_PORT)"; : "${DB_PORT:=3306}"
 [[ -n "$(env_get ADMIN_PASS)" ]] || warn "ADMIN_PASS kosong — login admin tidak akan bisa dipakai"
 ok "DB_NAME=$DB_NAME  DB_USER=$DB_USER  DB_HOST=$DB_HOST:$DB_PORT"
 
-# ========================================================== 5. DATABASE
-step "5/8  Database"
+# ========================================================== 4. DATABASE
+step "4/7  Database"
 
 if ! command -v mysql >/dev/null; then
     warn "klien mysql tidak ada — verifikasi database dilewati"
@@ -301,8 +290,8 @@ EOF
     fi
 fi
 
-# ====================================================== 6. FOLDER & IZIN
-step "6/8  Folder & izin"
+# ====================================================== 5. FOLDER & IZIN
+step "5/7  Folder & izin"
 
 if [[ $CHECK_ONLY -eq 0 ]]; then
     mkdir -p "$PROJECT_DIR/uploads"
@@ -326,142 +315,126 @@ sudo -u "$FPM_USER" test -r "$ENV_FILE" \
 
 info "Subfolder illustrations/ dan responses/ dibuat otomatis saat upload pertama."
 
-# ============================================================ 7. NGINX
-step "7/8  Server block Nginx"
+# ============================================================ 6. NGINX
+step "6/7  Sisipkan blok Nginx"
 
-HAS_CERT=0
-[[ -d "/etc/letsencrypt/live/$DOMAIN" ]] && HAS_CERT=1
+if [[ -z "$SITE_FILE" ]]; then
+    SITE_FILE="$(grep -rlE "^[[:space:]]*server_name[^;]*(^|[[:space:].])${DOMAIN//./\\.}([[:space:];]|$)" \
+        /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1 || true)"
+fi
+[[ -n "$SITE_FILE" && -f "$SITE_FILE" ]] \
+    || die "Server block untuk $DOMAIN tidak terdeteksi. Tentukan manual: --site /etc/nginx/sites-available/NAMA"
+
+# Symlink di sites-enabled/ -> sunting berkas aslinya di sites-available/.
+[[ -L "$SITE_FILE" ]] && SITE_FILE="$(readlink -f "$SITE_FILE")"
+ok "Server block: $SITE_FILE"
+
+# Siapkan blok dari template, sesuaikan path dan socket.
+SNIPPET="$TMP/survei.conf"
+sed -e "s#/var/www/aptpairport\.id#$NGINX_ROOT#g" \
+    -e "s#/survei/#$URL_PATH/#g" \
+    -e "s#= /survei #= $URL_PATH #g" \
+    -e "s#unix:/run/php/php8\.2-fpm\.sock#unix:$PHP_SOCK#" \
+    "$PROJECT_DIR/deploy/nginx-survei-subpath.conf" \
+    | sed '/^#/d' \
+    | awk '
+        # Buang baris kosong di awal & akhir. Tanpa ini setiap kali skrip
+        # dijalankan ulang, satu baris kosong menumpuk di server block.
+        { a[NR] = $0 }
+        END {
+            s = 1; while (s <= NR && a[s] ~ /^[[:space:]]*$/) s++
+            e = NR; while (e >= s && a[e] ~ /^[[:space:]]*$/) e--
+            for (i = s; i <= e; i++) print a[i]
+        }
+    ' > "$SNIPPET"
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
-    [[ -f "$SITE_FILE" ]] && ok "Server block ada: $SITE_FILE" || warn "Server block belum dibuat"
-    [[ -L "$SITE_LINK" ]] && ok "Site aktif: $SITE_LINK" || warn "Site belum diaktifkan"
-elif [[ -f "$SITE_FILE" ]] && grep -q "root  *$PROJECT_DIR;" "$SITE_FILE"; then
-    # Sudah menunjuk ke folder yang benar — biasanya karena certbot sudah
-    # menyunting berkas ini. Menimpanya akan membuang blok SSL-nya.
-    ok "Server block sudah menunjuk ke $PROJECT_DIR — dibiarkan apa adanya"
-    info "Mau menulis ulang dari template? Hapus dulu: $SITE_FILE"
-else
-    [[ -f "$SITE_FILE" ]] && cp -p "$SITE_FILE" "$SITE_FILE.bak-$(date +%F-%H%M%S)"
-
-    if [[ $HAS_CERT -eq 1 ]]; then
-        TEMPLATE="$PROJECT_DIR/deploy/nginx-aptpairport.id.conf"
-        [[ -f "$TEMPLATE" ]] || die "Template Nginx tidak ada: $TEMPLATE"
-        sed -e "s#/var/www/aptpairport\.id/survei#$PROJECT_DIR#g" \
-            -e "s#aptpairport\.id#$DOMAIN#g" \
-            -e "s#unix:/run/php/php8\.2-fpm\.sock#unix:$PHP_SOCK#" \
-            "$TEMPLATE" > "$TMP/site.conf"
-        CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
-        sed -i "s|^\( *\)# ssl_certificate / ssl_certificate_key diisi certbot|\1ssl_certificate $CERT_DIR/fullchain.pem;\n\1ssl_certificate_key $CERT_DIR/privkey.pem;|" \
-            "$TMP/site.conf"
-        grep -q 'ssl_certificate ' "$TMP/site.conf" \
-            || die "Gagal menyisipkan path sertifikat ke config — periksa template Nginx"
-        info "Memasang versi HTTPS (sertifikat ditemukan di $CERT_DIR)"
+    if grep -qF "$MARK_START" "$SITE_FILE"; then
+        ok "Blok survei sudah tersisip di $SITE_FILE"
     else
-        # Tanpa sertifikat, blok 'listen 443 ssl' membuat 'nginx -t' gagal.
-        # Pasang HTTP dulu; certbot yang menaikkannya ke HTTPS nanti.
-        info "Sertifikat belum ada -> memasang versi HTTP dulu, certbot menyusul"
-        cat > "$TMP/site.conf" <<HTTPONLY
-# Tahap 1: HTTP saja. Jalankan certbot untuk menambahkan HTTPS:
-#   certbot --nginx -d $DOMAIN -d www.$DOMAIN
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $DOMAIN www.$DOMAIN;
-
-    root  $PROJECT_DIR;
-    index index.php;
-
-    access_log /var/log/nginx/$DOMAIN.access.log;
-    error_log  /var/log/nginx/$DOMAIN.error.log;
-
-    # Default Nginx cuma 1 MB — upload foto 5 MB kena 413 sebelum PHP melihatnya.
-    client_max_body_size 6M;
-
-    error_page 403 /errors/403.html;
-    error_page 404 /errors/404.html;
-    error_page 413 /errors/413.html;
-    error_page 500 502 503 504 /errors/50x.html;
-    location ^~ /errors/ { internal; }
-
-    location ^~ /.well-known/acme-challenge/ { root /var/www/html; }
-
-    location ~ /\.(?!well-known) { deny all; }
-    location ^~ /database/ { deny all; }
-    location ~* \.(sql|md|sh|log|bak|ini|yml|yaml)\$ { deny all; }
-
-    # "^~" wajib: tanpa itu "location ~ \.php\$" tetap menang dan .php yang
-    # diselundupkan ke uploads/ akan tereksekusi.
-    location ^~ /uploads/ {
-        location ~* \.(php|phtml|phar|phps|cgi|pl|py|sh)\$ { deny all; }
-        add_header X-Content-Type-Options "nosniff" always;
-        try_files \$uri =404;
-    }
-
-    location ^~ /assets/ {
-        expires 7d;
-        add_header Cache-Control "public";
-        try_files \$uri =404;
-    }
-
-    location / { try_files \$uri \$uri/ =404; }
-
-    location ~ \.php\$ {
-        # snippets/fastcgi-php.conf sudah memuat try_files sendiri — jangan duplikat.
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:$PHP_SOCK;
-        fastcgi_read_timeout 120s;
-    }
-
-    add_header X-Content-Type-Options "nosniff"     always;
-    add_header X-Frame-Options        "SAMEORIGIN"  always;
-    add_header Referrer-Policy        "same-origin" always;
-}
-HTTPONLY
+        warn "Blok survei BELUM tersisip di $SITE_FILE"
     fi
+else
+    NGINX_BAK="$SITE_FILE.bak-$(date +%F-%H%M%S)"
+    cp -p "$SITE_FILE" "$NGINX_BAK"
 
-    cp "$TMP/site.conf" "$SITE_FILE"
-    chmod 644 "$SITE_FILE"
-    ln -sfn "$SITE_FILE" "$SITE_LINK"
-    mkdir -p /var/www/html
+    # Buang blok lama (kalau ada) supaya idempoten, lalu sisipkan yang baru
+    # tepat sebelum kurung tutup server block yang memuat server_name domain.
+    awk -v s="$MARK_START" -v e="$MARK_END" '
+        index($0, s) { skip = 1 }
+        !skip { print }
+        index($0, e) { skip = 0 }
+    ' "$SITE_FILE" > "$TMP/site.stripped"
+
+    awk -v snippet_file="$SNIPPET" -v dom="$DOMAIN" '
+        function emit_snippet(   line) {
+            while ((getline line < snippet_file) > 0) print line
+            close(snippet_file)
+        }
+        {
+            line = $0
+
+            # Hitung kedalaman kurung untuk mengenali batas server block.
+            open = gsub(/\{/, "{", line)
+            close_n = gsub(/\}/, "}", line)
+
+            if (depth == 0 && open > 0 && $0 ~ /server[[:space:]]*\{/) {
+                in_server = 1; found = 0
+            }
+            if (in_server && $0 ~ /^[[:space:]]*server_name/ && index($0, dom)) found = 1
+
+            newdepth = depth + open - close_n
+
+            # Baris yang menutup server block: sisipkan tepat sebelumnya.
+            if (in_server && found && depth > 0 && newdepth == 0) {
+                emit_snippet()
+                inserted = 1
+            }
+
+            print $0
+            depth = newdepth
+            if (depth == 0) in_server = 0
+        }
+        END { exit(inserted ? 0 : 1) }
+    ' "$TMP/site.stripped" > "$TMP/site.new" \
+        || die "Tidak menemukan penutup server block untuk $DOMAIN di $SITE_FILE — sisipkan manual dari deploy/nginx-survei-subpath.conf"
+
+    cat "$TMP/site.new" > "$SITE_FILE"
 
     if nginx -t 2>"$TMP/nginx.err"; then
-        ok "Config lolos 'nginx -t'"
+        ok "Config lolos 'nginx -t' (backup: $NGINX_BAK)"
         systemctl reload nginx
         ok "Nginx di-reload"
     else
-        rm -f "$SITE_LINK"
+        cp -p "$NGINX_BAK" "$SITE_FILE"
         printf '\n'; cat "$TMP/nginx.err"
-        die "nginx -t GAGAL — site sudah dinonaktifkan lagi, Nginx tidak berubah"
+        die "nginx -t GAGAL — config dikembalikan ke semula, Nginx tidak disentuh"
     fi
-fi
 
-if [[ $CHECK_ONLY -eq 0 ]]; then
     systemctl reload "$FPM_SERVICE" 2>/dev/null \
         && ok "$FPM_SERVICE di-reload (OPcache dibersihkan)" \
         || warn "Gagal reload $FPM_SERVICE — jalankan manual: systemctl reload $FPM_SERVICE"
 fi
 
-# ======================================================= 8. VERIFIKASI
-step "8/8  Verifikasi"
+# ======================================================= 7. VERIFIKASI
+step "7/7  Verifikasi"
 
-if [[ $HAS_CERT -eq 1 ]]; then
-    BASE="https://$DOMAIN"
-else
-    BASE="http://$DOMAIN"
-    warn "Belum ada sertifikat HTTPS"
-    info "Pasang sekarang : certbot --nginx -d $DOMAIN -d www.$DOMAIN"
-    info "Lalu ulangi     : sudo $0 --check"
-fi
-
+BASE="https://$DOMAIN"
 if ! command -v curl >/dev/null; then
     warn "curl tidak ada — uji HTTP dilewati"
 else
-    info "Menguji $BASE"
+    info "Menguji $BASE$URL_PATH/"
 
-    CODE="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "$BASE/login.php" 2>/dev/null || echo 000)"
-    [[ "$CODE" == "200" ]] && ok "login.php -> HTTP 200" || warn "login.php -> HTTP $CODE (cek $BASE dan error log Nginx)"
+    # Situs utama harus tetap hidup — instalasi ini tidak boleh merusaknya.
+    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "$BASE/" 2>/dev/null || echo 000)"
+    [[ "$C" == "200" ]] && ok "Situs utama $BASE/ masih HTTP 200" \
+        || warn "Situs utama $BASE/ -> HTTP $C — periksa, seharusnya tidak berubah"
 
-    BODY="$(curl -sS -L --max-time 20 "$BASE/upload_image.php" 2>/dev/null || true)"
+    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "$BASE$URL_PATH/login.php" 2>/dev/null || echo 000)"
+    [[ "$C" == "200" ]] && ok "$URL_PATH/login.php -> HTTP 200" \
+        || warn "$URL_PATH/login.php -> HTTP $C (cek error log Nginx)"
+
+    BODY="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/upload_image.php" 2>/dev/null || true)"
     if [[ "$BODY" == *'"success":false'* ]]; then
         ok "upload_image.php membalas JSON dengan benar"
     else
@@ -469,33 +442,35 @@ else
     fi
 
     # Berkas sensitif tidak boleh bisa diunduh siapa pun.
-    for p in /.env /database/database.sql /deploy.sh /DEPLOY.md /.git/config; do
-        C="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$p" 2>/dev/null || echo 000)"
+    for p in /.env /database/database.sql /deploy.sh /install.sh /DEPLOY.md /.git/config; do
+        C="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$URL_PATH$p" 2>/dev/null || echo 000)"
         if [[ "$C" == "403" || "$C" == "404" ]]; then
-            ok "$p diblokir (HTTP $C)"
+            ok "$URL_PATH$p diblokir (HTTP $C)"
         else
-            die "BAHAYA: $p bisa diakses (HTTP $C) — jangan biarkan situs seperti ini"
+            die "BAHAYA: $URL_PATH$p bisa diakses (HTTP $C) — jangan biarkan situs seperti ini"
         fi
     done
 
-    # Uji paling penting: skrip di uploads/ tidak boleh tereksekusi.
+    # Uji paling penting: berkas .php di uploads/ tidak boleh disajikan maupun
+    # dieksekusi. Aturan deny WAJIB bersarang di dalam blok uploads — versi
+    # sejajar dilewati Nginx karena blok uploads memakai "^~".
     CANARY="$PROJECT_DIR/uploads/__install_check_$$.php"
     printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY"
-    RESP="$(curl -sS -L --max-time 20 "$BASE/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
+    RESP="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
     rm -f "$CANARY"; CANARY=""
     if [[ "$RESP" == *TEREKSEKUSI* ]]; then
         printf '\n'
-        die "BAHAYA: .php di uploads/ TEREKSEKUSI — blok Nginx belum aktif"
+        die "BAHAYA: .php di uploads/ tersaji/tereksekusi — blok deny bersarang belum aktif"
     fi
-    ok "uploads/ menolak eksekusi PHP"
+    ok "uploads/ menolak berkas .php"
 
-    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE/uploads/index.html" 2>/dev/null || echo 000)"
-    [[ "$C" == "200" ]] && ok "File statis di uploads/ tetap tersaji" \
-        || warn "uploads/index.html -> HTTP $C (blokir hanya ekstensi skrip, bukan semua file)"
+    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/uploads/index.html" 2>/dev/null || echo 000)"
+    [[ "$C" == "200" ]] && ok "Berkas statis di uploads/ tetap tersaji" \
+        || warn "uploads/index.html -> HTTP $C (blokir hanya ekstensi skrip, bukan semua berkas)"
 
-    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE/assets/images/logo-apt.svg" 2>/dev/null || echo 000)"
-    [[ "$C" == "200" ]] && ok "Logo tersaji dari repo (tidak lagi menumpang situs lama)" \
-        || warn "assets/images/logo-apt.svg -> HTTP $C"
+    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/assets/images/logo-apt.svg" 2>/dev/null || echo 000)"
+    [[ "$C" == "200" ]] && ok "Logo tersaji dari repo" \
+        || warn "$URL_PATH/assets/images/logo-apt.svg -> HTTP $C"
 fi
 
 printf '\n%s' "$BOLD"
@@ -509,14 +484,14 @@ printf '%s' "$N"
 cat <<EOF
 
 Berikutnya:
-  1. Buka $BASE/login.php dan masuk dengan ADMIN_USER / ADMIN_PASS dari $ENV_FILE
+  1. Buka $BASE$URL_PATH/login.php, masuk dengan ADMIN_USER / ADMIN_PASS dari $ENV_FILE
   2. Buat satu survei -> salin tautan publiknya -> buka di jendela penyamaran
   3. Kirim satu jawaban berisi foto -> cek tab Hasil -> Detail -> Export Excel
-  4. Hapus salinan kredensial di dalam document root kalau masih ada:
+  4. Hapus salinan kredensial di dalam folder aplikasi kalau masih ada:
        rm -f $PROJECT_DIR/.env
 
-Rollback ke situs lama:
-  rm -f $SITE_LINK
-  # aktifkan lagi server block yang tadi dinonaktifkan (berakhiran .disabled-*)
+Rollback (situs utama tidak pernah disentuh, cukup buang blok survei):
+  ls $SITE_FILE.bak-*
+  cp $SITE_FILE.bak-XXXX $SITE_FILE
   nginx -t && systemctl reload nginx
 EOF

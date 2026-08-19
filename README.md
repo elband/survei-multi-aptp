@@ -38,9 +38,9 @@ Pastikan lingkungan lokal atau server Anda memiliki:
 >
 > | Situasi | Dokumen |
 > |---|---|
-> | Pasang **dari nol** di akar domain (Nginx + PHP-FPM) | [`INSTALL.md`](INSTALL.md) + `install.sh` |
+> | Pasang **dari nol** di sub-path `/survei/` (Nginx + PHP-FPM) | [`INSTALL.md`](INSTALL.md) + `install.sh` |
 > | **Update** instalasi yang sudah jalan | [`DEPLOY.md`](DEPLOY.md) + `deploy.sh` |
-> | Server block Nginx siap pakai | [`deploy/nginx-aptpairport.id.conf`](deploy/nginx-aptpairport.id.conf) |
+> | Blok Nginx siap tempel | [`deploy/nginx-survei-subpath.conf`](deploy/nginx-survei-subpath.conf) |
 
 Ikuti langkah-langkah mudah di bawah ini untuk menjalankan aplikasi pada PC atau *server* Anda:
 
