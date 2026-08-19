@@ -393,8 +393,9 @@ if [[ -z "$SITE_FILE" ]]; then
         SSL_COUNT="$(printf '%s\n' "$CANDIDATES" | awk -F'\t' '$1 == 1' | wc -l)"
         TOTAL="$(printf '%s\n' "$CANDIDATES" | wc -l)"
         if [[ "$SSL_COUNT" -eq 0 ]]; then
-            warn "Tidak ada server block ber-SSL untuk $DOMAIN — memakai blok non-SSL"
-            info "Kalau situs Anda dilayani lewat HTTPS, blok ini tidak akan pernah dilalui trafik."
+            info "Tidak ada server block ber-SSL untuk $DOMAIN — memakai blok non-SSL"
+            info "Ini normal kalau TLS diterminasi di depan (Cloudflare, load balancer),"
+            info "yang meneruskan ke origin lewat HTTP. Blok inilah yang dilalui trafik."
         else
             info "$TOTAL server block memuat $DOMAIN; dipilih yang ber-SSL"
         fi
