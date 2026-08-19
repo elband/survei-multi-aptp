@@ -421,6 +421,20 @@ fi
 [[ -L "$SITE_FILE" ]] && SITE_FILE="$(readlink -f "$SITE_FILE")"
 ok "Server block: $SITE_FILE"
 
+# Server block yang "root"-nya justru folder aplikasi ini berarti domain utama
+# sudah tergantikan aplikasi survei — biasanya sisa percobaan pemasangan di akar
+# domain. Menyisipkan blok sub-path ke situ tidak memperbaiki apa pun, dan
+# situs utama yang asli tetap hilang.
+if grep -qE "^[[:space:]]*root[[:space:]]+$PROJECT_DIR;" "$SITE_FILE"; then
+    printf '\n'
+    info "Server block ini memakai 'root $PROJECT_DIR' — artinya seluruh domain"
+    info "sudah diarahkan ke aplikasi survei, bukan ke situs utama Anda."
+    info "Server block situs utama yang asli kemungkinan dinonaktifkan; cari dengan:"
+    info "  ls -la /etc/nginx/sites-available/ | grep -i disabled"
+    printf '\n'
+    die "Pulihkan dulu server block situs utama, baru pasang blok sub-path ini"
+fi
+
 # Siapkan blok dari template, sesuaikan path dan socket.
 SNIPPET="$TMP/survei.conf"
 sed -e "s#/var/www/aptpairport\.id#$NGINX_ROOT#g" \
@@ -468,7 +482,10 @@ else
     # Rekam kondisi situs utama SEBELUM apa pun diubah, supaya kerusakan bisa
     # dikenali dan dibatalkan sendiri. Menyisipkan blok ke server block yang
     # salah pernah membuat situs utama hilang — jaring ini menangkap kasus itu.
-    MAIN_BEFORE="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
+    # Tanpa "-L" dengan sengaja: kalau situs utama tergantikan aplikasi lain,
+    # gejalanya justru 302 ke halaman lain. Mengikuti redirect membuat itu
+    # terbaca sebagai 200 dan kerusakan lolos tanpa ketahuan.
+    MAIN_BEFORE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
     info "Situs utama sebelum perubahan: HTTP $MAIN_BEFORE"
 
     NGINX_BAK="$SITE_FILE.bak-$(date +%F-%H%M%S)"
@@ -526,8 +543,8 @@ else
 
         # "nginx -t" hanya memeriksa sintaks — ia tidak tahu situs utama jadi
         # salah sasaran. Karena itu diuji sungguhan lewat HTTP.
-        MAIN_AFTER="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
-        if [[ "$MAIN_BEFORE" == "200" && "$MAIN_AFTER" != "200" ]]; then
+        MAIN_AFTER="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/" 2>/dev/null || echo 000)"
+        if [[ "$MAIN_BEFORE" != "$MAIN_AFTER" ]]; then
             cp -p "$NGINX_BAK" "$SITE_FILE"
             nginx -t >/dev/null 2>&1 && systemctl reload nginx
             BLOCK_INSTALLED=0
