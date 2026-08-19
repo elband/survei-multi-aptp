@@ -35,6 +35,7 @@ URL_PATH="/survei"
 PROJECT_DIR=""
 ENV_FILE="/var/www/survei.env"
 SITE_FILE=""
+BLOCK_INSTALLED=0
 REPO_URL="https://github.com/elband/survei-multi-aptp.git"
 PHP_SOCK=""
 CHECK_ONLY=0
@@ -431,6 +432,7 @@ STRIP_OLD='
 if [[ $CHECK_ONLY -eq 1 ]]; then
     if grep -qF "$MARK_START" "$SITE_FILE"; then
         ok "Blok survei sudah tersisip di $SITE_FILE"
+        BLOCK_INSTALLED=1
     else
         warn "Blok survei BELUM tersisip di $SITE_FILE"
     fi
@@ -497,6 +499,7 @@ else
         ok "Config lolos 'nginx -t' (backup: $NGINX_BAK)"
         systemctl reload nginx
         ok "Nginx di-reload"
+        BLOCK_INSTALLED=1
     else
         cp -p "$NGINX_BAK" "$SITE_FILE"
         printf '\n'; cat "$TMP/nginx.err"
@@ -522,54 +525,63 @@ else
     [[ "$C" == "200" ]] && ok "Situs utama $BASE/ masih HTTP 200" \
         || warn "Situs utama $BASE/ -> HTTP $C — periksa, seharusnya tidak berubah"
 
-    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "$BASE$URL_PATH/login.php" 2>/dev/null || echo 000)"
-    [[ "$C" == "200" ]] && ok "$URL_PATH/login.php -> HTTP 200" \
-        || warn "$URL_PATH/login.php -> HTTP $C (cek error log Nginx)"
-
-    BODY="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/upload_image.php" 2>/dev/null || true)"
-    if [[ "$BODY" == *'"success":false'* ]]; then
-        ok "upload_image.php membalas JSON dengan benar"
+    if [[ $BLOCK_INSTALLED -eq 0 ]]; then
+        # Blok belum tersisip (biasanya saat --check sebelum instalasi).
+        # Menguji URL di bawah $URL_PATH/ sekarang hanya menguji aplikasi
+        # lain yang melayani "/", dan hasilnya menyesatkan — bukan bukti
+        # ada yang bocor.
+        warn "Blok Nginx belum tersisip — seluruh uji $URL_PATH/ DILEWATI"
+        info "Jalankan tanpa --check untuk memasangnya, lalu uji ini berjalan otomatis."
     else
-        warn "upload_image.php membalas tak terduga: $(printf '%.80s' "$BODY")"
-    fi
+        C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 20 "$BASE$URL_PATH/login.php" 2>/dev/null || echo 000)"
+        [[ "$C" == "200" ]] && ok "$URL_PATH/login.php -> HTTP 200" \
+            || warn "$URL_PATH/login.php -> HTTP $C (cek error log Nginx)"
 
-    # Berkas sensitif tidak boleh bisa diunduh siapa pun.
-    for p in /.env /database/database.sql /deploy.sh /install.sh /DEPLOY.md /.git/config; do
-        C="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$URL_PATH$p" 2>/dev/null || echo 000)"
-        if [[ "$C" == "403" || "$C" == "404" ]]; then
-            ok "$URL_PATH$p diblokir (HTTP $C)"
+        BODY="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/upload_image.php" 2>/dev/null || true)"
+        if [[ "$BODY" == *'"success":false'* ]]; then
+            ok "upload_image.php membalas JSON dengan benar"
         else
-            die "BAHAYA: $URL_PATH$p bisa diakses (HTTP $C) — jangan biarkan situs seperti ini"
+            warn "upload_image.php membalas tak terduga: $(printf '%.80s' "$BODY")"
         fi
-    done
 
-    # Uji paling penting: berkas .php di uploads/ tidak boleh disajikan maupun
-    # dieksekusi. Aturan deny WAJIB bersarang di dalam blok uploads — versi
-    # sejajar dilewati Nginx karena blok uploads memakai "^~".
-    CANARY="$PROJECT_DIR/uploads/__install_check_$$.php"
-    if printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY" 2>/dev/null; then
-        RESP="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
-        rm -f "$CANARY"; CANARY=""
-        if [[ "$RESP" == *TEREKSEKUSI* ]]; then
-            printf '\n'
-            die "BAHAYA: .php di uploads/ tersaji/tereksekusi — blok deny bersarang belum aktif"
+        # Berkas sensitif tidak boleh bisa diunduh siapa pun.
+        for p in /.env /database/database.sql /deploy.sh /install.sh /DEPLOY.md /.git/config; do
+            C="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$URL_PATH$p" 2>/dev/null || echo 000)"
+            if [[ "$C" == "403" || "$C" == "404" ]]; then
+                ok "$URL_PATH$p diblokir (HTTP $C)"
+            else
+                die "BAHAYA: $URL_PATH$p bisa diakses (HTTP $C) — jangan biarkan situs seperti ini"
+            fi
+        done
+
+        # Uji paling penting: berkas .php di uploads/ tidak boleh disajikan maupun
+        # dieksekusi. Aturan deny WAJIB bersarang di dalam blok uploads — versi
+        # sejajar dilewati Nginx karena blok uploads memakai "^~".
+        CANARY="$PROJECT_DIR/uploads/__install_check_$$.php"
+        if printf '<?php echo "TEREKSEKUSI"; ?>' > "$CANARY" 2>/dev/null; then
+            RESP="$(curl -sS -L --max-time 20 "$BASE$URL_PATH/uploads/$(basename "$CANARY")" 2>/dev/null || true)"
+            rm -f "$CANARY"; CANARY=""
+            if [[ "$RESP" == *TEREKSEKUSI* ]]; then
+                printf '\n'
+                die "BAHAYA: .php di uploads/ tersaji/tereksekusi — blok deny bersarang belum aktif"
+            fi
+            ok "uploads/ menolak berkas .php"
+        else
+            # uploads/ belum writable (biasanya saat --check sebelum instalasi).
+            # Jangan biarkan "set -e" mematikan skrip hanya karena uji ini.
+            CANARY=""
+            warn "Tidak bisa menulis berkas uji ke uploads/ — uji eksekusi .php DILEWATI"
+            info "Uji ini wajib lulus sebelum situs dianggap aman. Ulangi setelah instalasi."
         fi
-        ok "uploads/ menolak berkas .php"
-    else
-        # uploads/ belum writable (biasanya saat --check sebelum instalasi).
-        # Jangan biarkan "set -e" mematikan skrip hanya karena uji ini.
-        CANARY=""
-        warn "Tidak bisa menulis berkas uji ke uploads/ — uji eksekusi .php DILEWATI"
-        info "Uji ini wajib lulus sebelum situs dianggap aman. Ulangi setelah instalasi."
+
+        C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/uploads/index.html" 2>/dev/null || echo 000)"
+        [[ "$C" == "200" ]] && ok "Berkas statis di uploads/ tetap tersaji" \
+            || warn "uploads/index.html -> HTTP $C (blokir hanya ekstensi skrip, bukan semua berkas)"
+
+        C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/assets/images/logo-apt.svg" 2>/dev/null || echo 000)"
+        [[ "$C" == "200" ]] && ok "Logo tersaji dari repo" \
+            || warn "$URL_PATH/assets/images/logo-apt.svg -> HTTP $C"
     fi
-
-    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/uploads/index.html" 2>/dev/null || echo 000)"
-    [[ "$C" == "200" ]] && ok "Berkas statis di uploads/ tetap tersaji" \
-        || warn "uploads/index.html -> HTTP $C (blokir hanya ekstensi skrip, bukan semua berkas)"
-
-    C="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 "$BASE$URL_PATH/assets/images/logo-apt.svg" 2>/dev/null || echo 000)"
-    [[ "$C" == "200" ]] && ok "Logo tersaji dari repo" \
-        || warn "$URL_PATH/assets/images/logo-apt.svg -> HTTP $C"
 fi
 
 printf '\n%s' "$BOLD"
